@@ -1,0 +1,175 @@
+/**
+ * Building and storing quotes.
+ *
+ * A quote is the merchant's final, all-in price. Two properties carry more
+ * weight than the field list:
+ *
+ *   - `total_minor` includes every fee, and it is what the budget check runs
+ *     against. A ¥25 latte that looks affordable plus a ¥5 delivery fee that
+ *     does not is still over budget; checking the item price instead of the
+ *     total is how a purchase fails at the till.
+ *   - `terms_hash` is computed here and stored here. The client echoes it back
+ *     at checkout and B recomputes it from its own record. A client-reported
+ *     total is an input to be checked, never a fact.
+ *
+ * A quote does not reserve stock. Reserving would make an abandoned quote hold
+ * a cup of coffee hostage until it expired, and the concurrency case the demo
+ * cares about — the last unit selling between quote and checkout — is exactly
+ * the one a reservation would hide.
+ */
+import type { Database } from 'bun:sqlite';
+import {
+  CommerceError,
+  buildQuoteTerms,
+  computeQuoteTermsHash,
+  newQuoteId,
+  quoteInconsistency,
+  quoteSchema,
+  type CreateQuoteRequest,
+  type Quote,
+} from '@ocp-catalog/shopping-contracts';
+import { toIso } from './clock';
+import type { MerchantConfig } from './config';
+import { isPurchasable, type CatalogEntryRecord } from './catalog';
+
+export interface BuildQuoteOptions {
+  readonly config: MerchantConfig;
+  readonly nowMs: number;
+}
+
+/**
+ * Prices one selection and freezes it into a quote.
+ *
+ * Every rejection here happens before a hash is computed, because a quote that
+ * cannot be fulfilled must not exist: A holds `terms_hash` from the moment it
+ * receives one, and an unusable quote that produced a hash is an invitation to
+ * sign an authorization over nothing.
+ */
+export function buildQuote(
+  record: CatalogEntryRecord,
+  request: CreateQuoteRequest,
+  options: BuildQuoteOptions,
+): Quote {
+  const { config, nowMs } = options;
+  const { attributes } = record;
+
+  if (!attributes.fulfillment.methods.includes(request.fulfillment.method)) {
+    throw new CommerceError(
+      'invalid_request',
+      `entry ${record.entry.entry_id} does not offer ${request.fulfillment.method}`,
+      { entry_id: record.entry.entry_id, supported: attributes.fulfillment.methods },
+    );
+  }
+
+  const requestedLocation = request.fulfillment.location_id;
+  if (requestedLocation !== undefined && requestedLocation !== config.locationId) {
+    throw new CommerceError('invalid_request', `unknown fulfillment location ${requestedLocation}`, {
+      location_id: requestedLocation,
+    });
+  }
+
+  const available = attributes.inventory.quantity;
+  if (!isPurchasable(record) || (available !== undefined && available < request.quantity)) {
+    throw new CommerceError(
+      'out_of_stock',
+      `entry ${record.entry.entry_id} has ${available ?? 'no'} units left, ${request.quantity} requested`,
+      { entry_id: record.entry.entry_id, available: available ?? 0, requested: request.quantity },
+    );
+  }
+
+  const unitMinor = attributes.price_minor;
+  const lineTotalMinor = unitMinor * request.quantity;
+  const fees =
+    request.fulfillment.method === 'delivery' && attributes.fulfillment.delivery_fee_minor !== undefined
+      ? [
+          {
+            code: 'delivery',
+            label: '配送费',
+            amount_minor: attributes.fulfillment.delivery_fee_minor,
+          },
+        ]
+      : [];
+  const subtotalMinor = lineTotalMinor;
+  const totalMinor = subtotalMinor + fees.reduce((sum, fee) => sum + fee.amount_minor, 0);
+
+  const draft: Omit<Quote, 'terms_hash'> = {
+    quote_id: newQuoteId(),
+    merchant_id: config.merchantId,
+    catalog_id: config.catalogId,
+    currency: attributes.price.currency,
+    items: [
+      {
+        entry_id: record.entry.entry_id,
+        title: record.entry.title,
+        quantity: request.quantity,
+        unit_minor: unitMinor,
+        line_total_minor: lineTotalMinor,
+      },
+    ],
+    fees,
+    subtotal_minor: subtotalMinor,
+    total_minor: totalMinor,
+    fulfillment: request.fulfillment,
+    created_at: toIso(nowMs),
+    expires_at: toIso(nowMs + config.quoteTtlSeconds * 1000),
+  };
+
+  const quote: Quote = { ...draft, terms_hash: computeQuoteTermsHash(draft) };
+
+  // A self-check, not a validation of client input. If this ever fires the bug
+  // is in the arithmetic above, and a wrong total is the kind of defect that is
+  // invisible until money has moved.
+  const problem = quoteInconsistency(quote);
+  if (problem !== null) {
+    throw new Error(`internal: built an inconsistent quote: ${problem}`);
+  }
+  if (buildQuoteTerms(quote).total_minor !== quote.total_minor) {
+    throw new Error('internal: terms and quote disagree about the total');
+  }
+
+  return quote;
+}
+
+export interface StoredQuote {
+  readonly quote: Quote;
+  readonly callerId: string;
+  readonly createdAtMs: number;
+  readonly expiresAtMs: number;
+}
+
+export function insertQuote(db: Database, quote: Quote, callerId: string): void {
+  db.query(
+    `INSERT INTO quotes (quote_id, caller_id, merchant_id, catalog_id, currency, terms_hash, quote_json, created_at_ms, expires_at_ms)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    quote.quote_id,
+    callerId,
+    quote.merchant_id,
+    quote.catalog_id,
+    quote.currency,
+    quote.terms_hash,
+    JSON.stringify(quote),
+    Date.parse(quote.created_at),
+    Date.parse(quote.expires_at),
+  );
+}
+
+interface QuoteRow {
+  quote_id: string;
+  caller_id: string;
+  quote_json: string;
+}
+
+export function getStoredQuote(db: Database, quoteId: string): StoredQuote | null {
+  const row = db
+    .query<QuoteRow, [string]>('SELECT quote_id, caller_id, quote_json FROM quotes WHERE quote_id = ?')
+    .get(quoteId);
+  if (row === null) return null;
+  const quote = quoteSchema.parse(JSON.parse(row.quote_json));
+  return {
+    quote,
+    callerId: row.caller_id,
+    createdAtMs: Date.parse(quote.created_at),
+    expiresAtMs: Date.parse(quote.expires_at),
+  };
+}

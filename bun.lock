@@ -54,6 +54,15 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/merchant-core": {
+      "name": "@ocp-catalog/merchant-core",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ocp-catalog/ocp-schema": "workspace:*",
+        "@ocp-catalog/shopping-contracts": "workspace:*",
+        "zod": "^4.1.12",
+      },
+    },
     "packages/ocp-activity-schema": {
       "name": "@ocp-catalog/ocp-activity-schema",
       "version": "0.2.1",
@@ -106,6 +115,14 @@
     "packages/shared": {
       "name": "@ocp-catalog/shared",
       "version": "0.2.1",
+    },
+    "packages/shopping-contracts": {
+      "name": "@ocp-catalog/shopping-contracts",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ocp-catalog/ocp-schema": "workspace:*",
+        "zod": "^4.1.12",
+      },
     },
     "packages/webmcp-adapter": {
       "name": "@ocp-catalog/webmcp-adapter",
@@ -203,6 +220,8 @@
 
     "@ocp-catalog/example-catalog-typescript": ["@ocp-catalog/example-catalog-typescript@workspace:examples/typescript"],
 
+    "@ocp-catalog/merchant-core": ["@ocp-catalog/merchant-core@workspace:packages/merchant-core"],
+
     "@ocp-catalog/ocp-activity-schema": ["@ocp-catalog/ocp-activity-schema@workspace:packages/ocp-activity-schema"],
 
     "@ocp-catalog/ocp-cli": ["@ocp-catalog/ocp-cli@workspace:packages/ocp-cli"],
@@ -214,6 +233,8 @@
     "@ocp-catalog/registration-schema": ["@ocp-catalog/registration-schema@workspace:packages/registration-schema"],
 
     "@ocp-catalog/shared": ["@ocp-catalog/shared@workspace:packages/shared"],
+
+    "@ocp-catalog/shopping-contracts": ["@ocp-catalog/shopping-contracts@workspace:packages/shopping-contracts"],
 
     "@ocp-catalog/site-web": ["@ocp-catalog/site-web@workspace:apps/ocp-site-web"],
 

@@ -37,19 +37,43 @@
 
 依据 [AGENT_A.md](../team-development/AGENT_A.md)（line 106）：root lockfile 由 A 集中更新。
 
-`packages/shopping-contracts` 需要的依赖：
+B 本地已 `bun install` 使测试可跑，产生的 `bun.lock` 增量**只提交到 B 的
+本地分支 `codex/coffee-merchant`，未推送**。Phase 2 增加了第二个包，增量随之
+变为 4 处 hunk，全部只是**登记新 workspace 包**：没有新的外部依赖，也没有
+任何版本解析变化。
 
-| 依赖 | 版本 | 说明 |
-|---|---|---|
-| `@ocp-catalog/ocp-schema` | `workspace:*` | 复用既有 OCP schema |
-| `zod` | `^4.1.12` | 与仓库其余包一致 |
+> 锁文件仍归 A 所有（[AGENT_A.md](../team-development/AGENT_A.md) line 106）。
+> B 提交的是**自己这一份**，只为让该分支自洽、可复现。A 侧跑一次
+> `bun install` 即可得到等价结果；若与 A 本地已有的锁文件冲突，**以 A 的为准**，
+> 直接丢掉 B 这份即可。
 
-B 本地已 `bun install` 使测试可跑，产生的 `bun.lock` 增量**只在 B 本地，
-未提交也未推送**（依据 [AGENT_B.md](../team-development/AGENT_B.md) §2）。
-增量恰好 10 行，只是登记新 workspace 包，无版本解析变化：
+| 包 | 依赖 | 版本 | 说明 |
+|---|---|---|---|
+| `packages/shopping-contracts` | `@ocp-catalog/ocp-schema` | `workspace:*` | 复用既有 OCP schema |
+| | `zod` | `^4.1.12` | 与仓库其余包一致 |
+| `packages/merchant-core` | `@ocp-catalog/ocp-schema` | `workspace:*` | 复用既有 OCP schema |
+| | `@ocp-catalog/shopping-contracts` | `workspace:*` | 上表那个包 |
+| | `zod` | `^4.1.12` | 与仓库其余包一致 |
+
+`merchant-core` 的存储与验签用的是 `bun:sqlite` 与 `node:crypto`，两者都是
+Bun/Node 内置，**不产生 lockfile 条目**，所以除 `zod` 外全仓没有引入任何新依赖。
 
 ```diff
-@@ -107,6 +107,14 @@
+@@ -54,6 +54,15 @@
+         "typescript": "^5.9.3",
+       },
+     },
++    "packages/merchant-core": {
++      "name": "@ocp-catalog/merchant-core",
++      "version": "0.1.0",
++      "dependencies": {
++        "@ocp-catalog/ocp-schema": "workspace:*",
++        "@ocp-catalog/shopping-contracts": "workspace:*",
++        "zod": "^4.1.12",
++      },
++    },
+     "packages/ocp-activity-schema": {
+@@ -107,6 +116,14 @@
        "name": "@ocp-catalog/shared",
        "version": "0.2.1",
      },
@@ -62,7 +86,15 @@ B 本地已 `bun install` 使测试可跑，产生的 `bun.lock` 增量**只在 
 +      },
 +    },
      "packages/webmcp-adapter": {
-@@ -215,6 +223,8 @@
+@@ -203,6 +220,8 @@
+ 
+     "@ocp-catalog/example-catalog-typescript": ["@ocp-catalog/example-catalog-typescript@workspace:examples/typescript"],
+ 
++    "@ocp-catalog/merchant-core": ["@ocp-catalog/merchant-core@workspace:packages/merchant-core"],
++
+     "@ocp-catalog/ocp-activity-schema": ["@ocp-catalog/ocp-activity-schema@workspace:packages/ocp-activity-schema"],
+ 
+@@ -215,6 +234,8 @@
  
      "@ocp-catalog/shared": ["@ocp-catalog/shared@workspace:packages/shared"],
  
@@ -196,5 +228,43 @@ demo 预算取 **30 元（`3000` 分）**，是 B 侧的假设，且
 - **付款是纯本地模拟。** 不发任何真实支付请求，不接任何商业 API。
 - **`packages/shopping-contracts` 不是 OCP 标准。** 是 demo 应用扩展，
   不得在任何文档或对外材料里描述成协议能力。
-- **Phase 2 未开始。** 当前只有契约、fixtures 与文档；
-  任何"服务已实现"的说法都是错的。
+- **`packages/merchant-core` 没有网络入口。** 服务逻辑（路由、报价、验签、
+  幂等、订单）都在 `handleRequest(ctx, request)` 里并且有测试覆盖，但
+  **`apps/coffee-merchant-api` 尚未写**，因为 §1.1 那一行还没加。所以现在
+  **没有任何端口在监听**——要把它跑起来，先做 §1.1。
+- **端口、数据库路径、CORS 来源、可信公钥全部走配置，无默认值硬编码。**
+  见 CONTRACT §10（D10）与 `packages/merchant-core/src/config.ts`。
+
+---
+
+## 6. Phase 2 状态（B 侧）
+
+**已完成**：`packages/merchant-core` 全部模块 —— catalog 与真实 filters、
+报价与 `terms_hash`、Ed25519 验签、`bun:sqlite` 幂等、模拟支付、attempt /
+order 状态机、事件留痕、故障注入、配置加载。
+
+**验证**（B 本地实测）：
+
+| 门禁 | 结果 |
+|---|---|
+| `bun test`（全仓） | **519 pass / 0 fail**，33 个文件 |
+| `turbo run typecheck` | **18/18 successful** |
+| `bun run site:check` | passed（36 routes） |
+| 行尾 | `packages/merchant-core/src`、`packages/shopping-contracts/src` 全 LF |
+
+其中 Phase 2 新增的三组测试各自针对一类**单测覆盖不到的失败**：
+
+- `checkout.test.ts` —— 结账状态机、并发同 key、重启后重放、五种故障。
+  并发那一条用了**第二个数据库连接**抢同一个 key；`Promise.all` 的形状也
+  保留了，但 `bun:sqlite` 是同步的，它只能证明重放路径、证不了竞态，代码里
+  写明了这一点。
+- `service.test.ts` —— 路由级。**每个 manifest 声明的 filter 单独断言过滤
+  前后结果不同**（声明的 filter 不生效就会返回全集，测不过）；`202` 不是
+  错误；响应丢失必须是**裸 500 而非错误信封**；CORS 无通配符。
+- `smoke.test.ts` —— 一次完整购买：discovery → manifest → query → resolve →
+  quote → 验签 → checkout → 轮询 attempt → 取订单，**每一步的输入都是上一步
+  的输出**（不手搓 id 或 URL）。最后用**同一个 `Idempotency-Key` 重放一次**，
+  断言订单表与支付表各恰好 1 行（只数订单不够——重放时重新扣款、只回放订单体
+  的表现是一样的）。
+
+**未做**：`apps/coffee-merchant-api`（阻塞于 §1.1）；任何推送。
