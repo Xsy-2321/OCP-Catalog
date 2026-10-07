@@ -29,9 +29,14 @@
 "workspaces": ["packages/*", "examples/typescript", "apps/ocp-site-web", "apps/coffee-merchant-api"]
 ```
 
-**时点**：Phase 2 写 `apps/coffee-merchant-api` 之前即可。Phase 1
-（`packages/shopping-contracts`、`fixtures/shopping`、`docs/coffee-merchant`）
-**不依赖**这一行，现在就能跑。
+**时点**：`apps/coffee-merchant-api` **代码已经写好**（`src/server.ts`，B 侧
+Phase 2 的一部分），但因为这一行缺失，它既不被 `bun install` 解析、也不被
+`turbo` 看见，`import '@ocp-catalog/merchant-core'` 无法解析。所以这一行现在是
+**让那个 app 能启动**的唯一前提——B 是手工建了一个 `node_modules` junction
+才跑通的（`node_modules` 不入库，所以没有改任何受版本控制的文件）。
+
+Phase 1（`packages/shopping-contracts`、`fixtures/shopping`、`docs/coffee-merchant`）
+**不依赖**这一行。
 
 ### 1.2 锁文件
 
@@ -41,6 +46,11 @@ B 本地已 `bun install` 使测试可跑，产生的 `bun.lock` 增量**只提�
 本地分支 `codex/coffee-merchant`，未推送**。Phase 2 增加了第二个包，增量随之
 变为 4 处 hunk，全部只是**登记新 workspace 包**：没有新的外部依赖，也没有
 任何版本解析变化。
+
+> ⚠ **A 加上 §1.1 那一行再跑 `bun install` 后，增量会再多一处**（登记
+> `apps/coffee-merchant-api` 及其 `workspace:*` 依赖），仍然**没有外部依赖**。
+> B 这份锁文件里**不含**那一处，因为 B 不能改根 `package.json`，所以也就没有
+> 用它跑过 `bun install`。
 
 > 锁文件仍归 A 所有（[AGENT_A.md](../team-development/AGENT_A.md) line 106）。
 > B 提交的是**自己这一份**，只为让该分支自洽、可复现。A 侧跑一次
@@ -54,6 +64,22 @@ B 本地已 `bun install` 使测试可跑，产生的 `bun.lock` 增量**只提�
 | `packages/merchant-core` | `@ocp-catalog/ocp-schema` | `workspace:*` | 复用既有 OCP schema |
 | | `@ocp-catalog/shopping-contracts` | `workspace:*` | 上表那个包 |
 | | `zod` | `^4.1.12` | 与仓库其余包一致 |
+| `apps/coffee-merchant-api` | `@ocp-catalog/merchant-core` | `workspace:*` | 上表那个包 |
+
+`apps/coffee-merchant-api` **没有 devDependencies**，是刻意的：它和
+`merchant-core` 一样直接吃根目录已有的 `typescript` 与 `@types/bun`
+（`tsconfig.base.json` 的 `"types": ["bun"]` 从子目录向上找到根
+`node_modules/@types`）。所以登记这个 app **不会给锁文件带来任何新条目**，
+只是多一条 workspace 登记。
+
+> ⚠ 这个 app 的 `typecheck` **依赖 `merchant-core` 先构建**：
+> `merchant-core` 的导出走 `"types": "./dist/index.d.ts"`，`dist/` 不存在时
+> 直接 `tsc -p apps/coffee-merchant-api` 会报 `TS2307`（找不到
+> `@ocp-catalog/merchant-core`）**外加一条行 105 的 `TS18046`**。后者是前者的
+> 派生结果（模块解析失败后 `MerchantConfigError` 不再是一个可窄化的类型），
+> **不是两个 bug**。`turbo run typecheck` 的 `dependsOn: ["^build"]` 已经保证
+> 顺序，所以走 turbo 不会碰到；**只有绕过 turbo 手跑 `tsc` 时才会**——那就先
+> `bun run --cwd packages/merchant-core build`。
 
 `merchant-core` 的存储与验签用的是 `bun:sqlite` 与 `node:crypto`，两者都是
 Bun/Node 内置，**不产生 lockfile 条目**，所以除 `zod` 外全仓没有引入任何新依赖。
@@ -228,10 +254,13 @@ demo 预算取 **30 元（`3000` 分）**，是 B 侧的假设，且
 - **付款是纯本地模拟。** 不发任何真实支付请求，不接任何商业 API。
 - **`packages/shopping-contracts` 不是 OCP 标准。** 是 demo 应用扩展，
   不得在任何文档或对外材料里描述成协议能力。
-- **`packages/merchant-core` 没有网络入口。** 服务逻辑（路由、报价、验签、
-  幂等、订单）都在 `handleRequest(ctx, request)` 里并且有测试覆盖，但
-  **`apps/coffee-merchant-api` 尚未写**，因为 §1.1 那一行还没加。所以现在
-  **没有任何端口在监听**——要把它跑起来，先做 §1.1。
+- **`apps/coffee-merchant-api` 写好了，但不在 workspace 里。** 网络入口是
+  `apps/coffee-merchant-api/src/server.ts`：读配置 → 开库 → `Bun.serve` →
+  收尾关库，路由逻辑一行都没有（都在 `merchant-core` 的 `handleRequest` 里）。
+  它能跑通，但**必须先把 §1.1 那一行加上**，否则 `@ocp-catalog/merchant-core`
+  无法解析。B 是用手工 junction 验证的，没有改任何受版本控制的文件。
+  **监听地址默认 `127.0.0.1`**：`x-dev-caller-id` 是调用方自己写的头，绑到
+  `0.0.0.0` 等于让同网段任何人都能冒充任意调用者。
 - **端口、数据库路径、CORS 来源、可信公钥全部走配置，无默认值硬编码。**
   见 CONTRACT §10（D10）与 `packages/merchant-core/src/config.ts`。
 
@@ -267,4 +296,16 @@ order 状态机、事件留痕、故障注入、配置加载。
   断言订单表与支付表各恰好 1 行（只数订单不够——重放时重新扣款、只回放订单体
   的表现是一样的）。
 
-**未做**：`apps/coffee-merchant-api`（阻塞于 §1.1）；任何推送。
+**入口**：`apps/coffee-merchant-api`（`package.json` / `tsconfig.json` /
+`.env.example` / `.gitignore` / `README.md` / `src/server.ts`）。它不含任何路由，
+只读配置、开库、`Bun.serve`、收尾关库。**没有测试**是刻意的：路由都在
+`merchant-core` 里由那 28 条路由级用例覆盖，这正是 `handleRequest` 被写成纯函数
+的原因。它在 workspace 之外，所以不在这张表里。
+
+**B 手工验证（junction 链接依赖后）**：`tsc --noEmit` 干净；真实启动并 HTTP
+实测 discovery / health / `拿铁` 查询（1 条结果）/ 报价（`total_minor` 2500）/
+resolve / CORS 预检 204 / 缺 caller 401 / 未知路由 404；配置失败（缺
+`MERCHANT_DB_PATH`、库路径的目录不存在、端口被占、未知 fault 名）**全部 exit 1
+并给出原因，而不是抛栈**。
+
+**未做**：任何推送。
