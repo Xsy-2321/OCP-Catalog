@@ -1,0 +1,10 @@
+# The private half is generated locally by derive-test-keys.ts and must never be
+# committed — even though this particular key is a public-knowledge test value.
+# The habit is the point: a repository that tolerates a committed private key is
+# a repository where a real one eventually lands.
+*.private.pem
+
+# Only the public key is tracked, because B trusts it by configuration
+# (README §5: B configures trusted public keys; a key in the request is never a
+# source of trust).
+!agent_a_test.public.pem

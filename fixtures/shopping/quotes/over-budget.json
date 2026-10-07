@@ -1,0 +1,25 @@
+{
+  "quote_id": "quote_fixture_giftbox",
+  "merchant_id": "merchant_coffee_demo",
+  "catalog_id": "catalog_coffee_demo",
+  "currency": "CNY",
+  "items": [
+    {
+      "entry_id": "entry_gift_box",
+      "title": "手冲礼盒",
+      "quantity": 1,
+      "unit_minor": 8800,
+      "line_total_minor": 8800
+    }
+  ],
+  "fees": [],
+  "subtotal_minor": 8800,
+  "total_minor": 8800,
+  "fulfillment": {
+    "method": "pickup",
+    "location_id": "store_zjg"
+  },
+  "created_at": "2026-10-07T10:00:00.000Z",
+  "expires_at": "2026-10-07T10:15:00.000Z",
+  "terms_hash": "3d798cae80f51d377299be1cf3099ab73b9333f7d16cd389b843e49b2ed4d528"
+}

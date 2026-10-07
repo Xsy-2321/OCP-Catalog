@@ -1,0 +1,90 @@
+{
+  "ocp_version": "1.0",
+  "kind": "ResolvableReference",
+  "id": "res_fixture_latte",
+  "catalog_id": "catalog_coffee_demo",
+  "entry_id": "entry_latte",
+  "commercial_object_id": "co_entry_latte",
+  "object_id": "obj_entry_latte",
+  "object_type": "ocp.commerce.product",
+  "provider_id": "provider_coffee_demo",
+  "title": "拿铁",
+  "visible_attributes": {
+    "brand": "演示咖啡",
+    "category": "coffee",
+    "price": {
+      "currency": "CNY",
+      "amount": 25
+    },
+    "price_minor": 2500,
+    "availability_status": "in_stock",
+    "fulfillment": {
+      "methods": [
+        "pickup",
+        "delivery"
+      ],
+      "delivery_fee_minor": 500
+    }
+  },
+  "access": {
+    "visibility": "public",
+    "permission_state": "granted",
+    "redacted_fields": [],
+    "policy_notes": []
+  },
+  "live_checks": [
+    {
+      "check_id": "lc_fixture_1",
+      "status": "passed",
+      "checked_at": "2026-10-07T10:05:00.000Z",
+      "summary": "Stock and price confirmed against the merchant.",
+      "details": {}
+    }
+  ],
+  "action_bindings": [
+    {
+      "action_id": "view",
+      "action_type": "url",
+      "label": "打开商品页",
+      "entrypoint": {
+        "url": "http://127.0.0.1:8787/products/entry_latte",
+        "method": "GET"
+      },
+      "auth_requirements": {},
+      "requires_user_confirmation": false
+    },
+    {
+      "action_id": "checkout",
+      "action_type": "api",
+      "label": "结账",
+      "description": "提交报价与用户授权证明，发起一次购买尝试。",
+      "entrypoint": {
+        "url": "http://127.0.0.1:8787/commerce/v1/checkouts",
+        "method": "POST"
+      },
+      "input_schema": {
+        "required": [
+          "purchase_attempt_id",
+          "quote_id",
+          "terms_hash",
+          "authorization"
+        ],
+        "headers": {
+          "idempotency-key": "stable across retries of the same logical purchase",
+          "x-dev-caller-id": "local development caller identity — not an account system"
+        }
+      },
+      "auth_requirements": {
+        "scheme": "ed25519",
+        "key_id": "agent_a_test"
+      },
+      "requires_user_confirmation": true,
+      "expires_at": "2026-10-07T10:15:00.000Z"
+    }
+  ],
+  "freshness": {
+    "object_updated_at": "2026-10-07T10:00:00.000Z",
+    "resolved_at": "2026-10-07T10:05:00.000Z"
+  },
+  "expires_at": "2026-10-07T10:15:00.000Z"
+}

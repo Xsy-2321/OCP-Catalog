@@ -1,0 +1,57 @@
+{
+  "ocp_version": "1.0",
+  "kind": "CatalogManifest",
+  "id": "manifest_catalog_coffee_demo",
+  "catalog_id": "catalog_coffee_demo",
+  "catalog_name": "演示咖啡（本地模拟）",
+  "description": "本地演示咖啡店。付款为本地模拟，不接任何真实支付。",
+  "registry_visibility": "public",
+  "endpoints": {
+    "health": {
+      "url": "http://127.0.0.1:8787/ocp/health",
+      "method": "GET"
+    },
+    "query": {
+      "url": "http://127.0.0.1:8787/ocp/query",
+      "method": "POST"
+    },
+    "resolve": {
+      "url": "http://127.0.0.1:8787/ocp/resolve",
+      "method": "POST"
+    }
+  },
+  "query_capabilities": [
+    {
+      "capability_id": "ocp.demo.coffee.search.v1",
+      "name": "Coffee catalog keyword search",
+      "description": "Case-insensitive keyword match over title, summary, brand and category.",
+      "query_packs": [
+        {
+          "pack_id": "ocp.query.keyword.v1",
+          "description": "Keyword search with optional filters.",
+          "query_modes": [
+            "keyword"
+          ],
+          "metadata": {}
+        }
+      ],
+      "searchable_field_refs": [
+        "product.core#/title",
+        "product.core#/brand",
+        "product.core#/category"
+      ],
+      "filterable_field_refs": [
+        "product.core#/category",
+        "product.core#/brand",
+        "price#/currency",
+        "price#/amount",
+        "inventory#/availability_status"
+      ],
+      "sortable_field_refs": [],
+      "supports_explain": true,
+      "supports_resolve": true,
+      "metadata": {}
+    }
+  ],
+  "object_contracts": []
+}
