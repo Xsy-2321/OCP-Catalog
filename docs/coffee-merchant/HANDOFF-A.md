@@ -259,7 +259,7 @@ order 状态机、事件留痕、故障注入、配置加载。
 
 | 门禁 | 结果 |
 |---|---|
-| `bun test`（全仓） | **519 pass / 0 fail**，33 个文件 |
+| `bun test`（全仓） | **525 pass / 0 fail**，34 个文件（含 app 的 6 条超时预算用例） |
 | `turbo run typecheck` | **18/18 successful** |
 | `bun run site:check` | passed（36 routes） |
 | 行尾 | `packages/merchant-core/src`、`packages/shopping-contracts/src` 全 LF |
@@ -280,10 +280,19 @@ order 状态机、事件留痕、故障注入、配置加载。
   的表现是一样的）。
 
 **入口**：`apps/coffee-merchant-api`（`package.json` / `tsconfig.json` /
-`.env.example` / `.gitignore` / `README.md` / `src/server.ts`）。它不含任何路由，
-只读配置、开库、`Bun.serve`、收尾关库。**没有测试**是刻意的：路由都在
-`merchant-core` 里由那 28 条路由级用例覆盖，这正是 `handleRequest` 被写成纯函数
-的原因。它在 workspace 之外，所以不在这张表里。
+`.env.example` / `.gitignore` / `README.md` / `src/server.ts` / `src/deadline.ts`
++ 其测试）。它不含任何路由，只读配置、开库、`Bun.serve`、收尾关库。
+**没有路由测试**是刻意的：路由都在 `merchant-core` 里由那 28 条路由级用例覆盖，
+这正是 `handleRequest` 被写成纯函数的原因。它在 workspace 之外，所以不在这张表里。
+
+它有测试的那部分只有**超时预算**（`src/deadline.test.ts`，6 条，已并入根
+`bun test`：**525 pass / 0 fail，34 文件**）——因为那是唯一**不属于任何单独一侧**
+的逻辑：`config.ts` 限制 deadline 却不知道 socket 能开多久，两者配错就是"结算还没
+答完就被挂断"。⚠ **`src/deadline.ts` 被刻意做成零 import 的叶子模块**：
+根 `bun test` 会扫全树（含 workspace 之外的目录），若该测试 import
+`merchant-core`，则**在任何尚未加 `apps/*` 那一行的检出上，根门禁都会因模块解析
+失败而变红**——把"漏加一行 workspace"伪装成"app 代码坏了"。叶子模块使这 6 条测试
+在注册前后都跑得起来（此点在无 junction、无 workspace 条目的条件下实测过）。
 
 **B 手工验证（junction 链接依赖后）**：`tsc --noEmit` 干净；真实启动并 HTTP
 实测 discovery / health / `拿铁` 查询（1 条结果）/ 报价（`total_minor` 2500）/

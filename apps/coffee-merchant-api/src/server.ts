@@ -32,6 +32,8 @@ import {
   type MerchantContext,
 } from '@ocp-catalog/merchant-core';
 
+import { deadlineProblem, idleTimeoutSeconds } from './deadline';
+
 /**
  * Read here rather than in `config.ts`: the bind address is a property of the
  * socket this app opens, not of the merchant's transaction semantics, and
@@ -41,30 +43,12 @@ const ENV_HOST = 'MERCHANT_HOST';
 const DEFAULT_HOST = '127.0.0.1';
 
 /**
- * Headroom added on top of the settlement deadline before the socket gives up.
- *
- * A checkout may legitimately spend `checkoutDeadlineMs` settling and then answer
- * `202 processing` — an unknown outcome, not a failure (contract §8 D6). If the
- * socket timed out first, the caller would see a dropped connection instead, which
- * is exactly the "looks like failure, is not failure" confusion the contract
- * exists to prevent. Bun's own default is 10 seconds.
+ * The socket must outlive a settlement that runs the whole deadline, so a slow
+ * checkout answers `202 processing` rather than being cut off first (contract §8
+ * D6). The arithmetic, Bun's ceiling, and the check that pairs them live in
+ * `./deadline`, where they are testable without opening a port. Bun's own
+ * default idle timeout is 10 seconds.
  */
-const IDLE_TIMEOUT_HEADROOM_S = 30;
-/** Bun rejects anything above 255 seconds. */
-const IDLE_TIMEOUT_MAX_S = 255;
-
-/**
- * The longest settlement deadline that still gets the full headroom above.
- *
- * Bun's ceiling is hard, so a longer deadline cannot be served the way the
- * constant above describes: the timeout would be clamped to the ceiling and the
- * socket would hang up while the checkout was still settling. Note that the
- * deadline only has to *exceed the ceiling* to break the contract, but anything
- * above this value has already lost part of the headroom — and a demo whose
- * deadline is measured in minutes is a misconfiguration, not a use case worth
- * supporting with a narrower margin. See `assertDeadlineFitsSocket`.
- */
-const MAX_DEADLINE_WITH_HEADROOM_MS = (IDLE_TIMEOUT_MAX_S - IDLE_TIMEOUT_HEADROOM_S) * 1000;
 
 const USAGE = `Usage: bun run start [--check]
 
@@ -141,34 +125,16 @@ function hostForDisplay(host: string): string {
 /**
  * Refuses a settlement deadline the socket cannot outlive.
  *
- * `config.ts` validates that the deadline is a positive integer and stops there:
- * it has no opinion about how long a socket may stay open, because that is a
- * property of the server rather than of the transaction. The two numbers
- * together decide whether a slow checkout can answer `202` or gets cut off, so
- * the check belongs here, where both are known. Without it the two files would
- * each be self-consistent and the pair still wrong.
+ * The judgement itself is `deadlineProblem` in `./deadline`; what happens *here*
+ * is the refusal. `config.ts` validates that the deadline is a positive integer
+ * and stops there: it has no opinion about how long a socket may stay open,
+ * because that is a property of the server rather than of the transaction. Each
+ * file is self-consistent on its own and the pair can still be wrong, which is
+ * why the seam gets its own check rather than being implied by either.
  */
-function assertDeadlineFitsSocket(config: MerchantConfig): void {
-  if (config.checkoutDeadlineMs <= MAX_DEADLINE_WITH_HEADROOM_MS) return;
-  fail(
-    `MERCHANT_CHECKOUT_DEADLINE_MS is ${config.checkoutDeadlineMs}ms, above the ` +
-      `${MAX_DEADLINE_WITH_HEADROOM_MS}ms this server can serve.\n\n` +
-      `Bun caps a socket's idle timeout at ${IDLE_TIMEOUT_MAX_S}s, so a settlement allowed to ` +
-      'run longer would be hung up on before it could answer: the caller would see a dropped ' +
-      'connection where the contract promises 202 processing.',
-  );
-}
-
-/**
- * The socket must outlive a settlement that runs the whole deadline, because the
- * contract answers that case with `202 processing` rather than failure (contract
- * §8 D6). `assertDeadlineFitsSocket` has already established that the ceiling
- * cannot bite below the deadline, so the `Math.min` here is belt-and-braces
- * rather than a live clamp.
- */
-function idleTimeoutFor(config: MerchantConfig): number {
-  const seconds = Math.ceil(config.checkoutDeadlineMs / 1000) + IDLE_TIMEOUT_HEADROOM_S;
-  return Math.min(IDLE_TIMEOUT_MAX_S, seconds);
+function assertDeadlineFitsSocket(deadlineMs: number): void {
+  const problem = deadlineProblem(deadlineMs);
+  if (problem !== null) fail(problem);
 }
 
 /* ------------------------------------------------------------------ startup */
@@ -239,7 +205,7 @@ function startServer(ctx: MerchantContext, hostname: string): ReturnType<typeof 
     return Bun.serve({
       hostname,
       port: ctx.config.port,
-      idleTimeout: idleTimeoutFor(ctx.config),
+      idleTimeout: idleTimeoutSeconds(ctx.config.checkoutDeadlineMs),
       fetch: createRequestHandler(ctx),
     });
   } catch (error) {
@@ -295,7 +261,7 @@ function main(argv: readonly string[]): void {
   const config = readConfig();
   // Checks a cross-file invariant rather than one of this package's own values,
   // so it runs after `readConfig` has had its say about the deadline itself.
-  assertDeadlineFitsSocket(config);
+  assertDeadlineFitsSocket(config.checkoutDeadlineMs);
   const host = resolveHost(process.env);
   // Opening the context is also what proves the database path is usable, which is
   // the failure `--check` exists to surface without a port conflict on top of it.

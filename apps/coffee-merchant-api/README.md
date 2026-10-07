@@ -112,10 +112,21 @@ directory when the server is started through this package.
 
 - No authentication beyond the demo header — there is no account system.
 - No TLS; the demo speaks plain HTTP on loopback.
-- No tests in this package. That is deliberate rather than an omission: the routes
-  live in `merchant-core` and are covered there by the route-level suite, which is
-  the reason `handleRequest` is a plain `Request -> Response` function. What is
-  left here is configuration loading, listening and shutdown.
+- **This package has no route tests, deliberately** — the routes live in
+  `merchant-core` and are covered there by the route-level suite, which is the
+  reason `handleRequest` is a plain `Request -> Response` function. What *is*
+  tested here is the timeout budget (`src/deadline.test.ts`), because it is the
+  one piece of logic that belongs to neither package alone: `config.ts` bounds
+  the deadline without knowing how long a socket may stay open, and getting the
+  pair wrong means a slow checkout is hung up on where the contract promises
+  `202`. Untested here: configuration loading, listening and shutdown, all of
+  which need a real port.
+- **`src/deadline.ts` is a leaf module on purpose.** Root `bun test` scans the
+  whole tree, including directories outside the workspace, so a test file here
+  that imported `merchant-core` would fail the root gate on any checkout where
+  the `apps/*` workspace entry has not been added yet — making a registration
+  omission look like broken app code. Keeping the arithmetic free of imports
+  means these tests run either way.
 - **Shutdown on an external signal is unverified on Windows.** The `SIGINT` /
   `SIGTERM` handler is registered and correct for a console `Ctrl+C`, but on this
   machine a signal delivered from another process terminates the server without
