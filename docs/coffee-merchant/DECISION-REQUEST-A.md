@@ -141,4 +141,4 @@ D2 的整个安全性质就退化了**——这与 D2 里"请求自带的公钥�
 - 跨调用者访问 → **404**，有测试；`forbidden` 未用于该场景。
 - 报价 TTL → 默认 **900 秒**，可由 `MERCHANT_QUOTE_TTL_SECONDS` 覆盖。
 - 预算 → **无独立字段**，只读授权载荷的 `max_total_minor`。
-- 以上三项都在 B 的本地分支 `codex/coffee-merchant` 上，**未推送**。
+- 以上三项都在分支 `codex/coffee-merchant` 上，**已推送到 `origin`**，A 可直接 fetch。

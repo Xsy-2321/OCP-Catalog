@@ -1,6 +1,6 @@
 # 交接给 Agent A
 
-**分支**：`codex/coffee-merchant`（B 的本地分支，**尚未推送**）
+**分支**：`codex/coffee-merchant`（**已推送到 `origin`**；`git fetch origin codex/coffee-merchant` 即可取到，**未开 PR**）
 **契约版本**：`SHOPPING_CONTRACT_VERSION = 0.1.0`
 **冻结契约**：[CONTRACT.md](./CONTRACT.md)
 **日期**：2026-10-07
@@ -42,8 +42,8 @@ Phase 1（`packages/shopping-contracts`、`fixtures/shopping`、`docs/coffee-mer
 
 依据 [AGENT_A.md](../team-development/AGENT_A.md)（line 106）：root lockfile 由 A 集中更新。
 
-B 本地已 `bun install` 使测试可跑，产生的 `bun.lock` 增量**只提交到 B 的
-本地分支 `codex/coffee-merchant`，未推送**。Phase 2 增加了第二个包，增量随之
+B 本地已 `bun install` 使测试可跑，产生的 `bun.lock` 增量**提交在分支
+`codex/coffee-merchant` 上**（该分支已推送）。Phase 2 增加了第二个包，增量随之
 变为 4 处 hunk，全部只是**登记新 workspace 包**：没有新的外部依赖，也没有
 任何版本解析变化。
 
@@ -133,10 +133,14 @@ A 在自己的 clone 上跑一次 `bun install` 即可得到等价结果。
 
 `fixtures/` 不是 workspace，不需要任何条目。
 
-### 1.3 B 没有做的事
+### 1.3 B 做到了哪、没做哪些
 
-- ❌ 未推送任何分支
-- ❌ 未改根 `package.json`、`bun.lock`、`turbo.json`、CI
+- ✅ 分支 `codex/coffee-merchant` **已推送到 `origin`**，A 可直接 fetch。
+  **未开 PR**——是否合并由 A 决定。
+- ❌ 未改根 `package.json` —— 新增 `apps/*` 那一行只能由 A 加（§1.1）。
+- ⚠️ 改过 `bun.lock`，但**只是自己那一份**：B 不能改根配置，所以它**不含**
+  §1.1 那一行带来的登记。A 若已有自己的锁文件，**以 A 的为准**（§1.2）。
+- ❌ 未改 `turbo.json`、CI
 - ❌ 未改 `packages/ocp-*`、`examples/`
 - ❌ 未改 A 的 UI / Runtime / 授权签发 / E2E 目录
 
@@ -300,4 +304,4 @@ resolve / CORS 预检 204 / 缺 caller 401 / 未知路由 404；配置失败（�
 `MERCHANT_DB_PATH`、库路径的目录不存在、端口被占、未知 fault 名）**全部 exit 1
 并给出原因，而不是抛栈**。
 
-**未做**：任何推送。
+**已做**：分支推送到 `origin`（**未开 PR**）。此后 B 的提交都会推到同一分支。
