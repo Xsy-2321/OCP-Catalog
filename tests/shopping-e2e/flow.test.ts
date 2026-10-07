@@ -31,12 +31,13 @@ async function ready(entry = 'mock_latte'): Promise<PublicSession> {
 function confirmation(session: PublicSession) { return { quote_id: session.quote!.quote_id, terms_hash: session.quote!.terms_hash, revision: session.revision }; }
 
 describe('A-only local HTTP E2E (not B integration)', () => {
-  test('serves Chinese UI and explicitly reports mock, missing C0 and missing LLM', async () => {
+  test('serves Chinese UI and explicitly reports mock payment, shared contract and missing LLM', async () => {
     const config = await (await call('/api/config')).json();
-    expect(config).toEqual({ mode: 'mock', c0_status: 'pending', llm_status: 'not_configured' });
+    expect(config).toEqual({ mode: 'mock', merchant_id: 'coffee-demo', payment_mode: 'local_simulated',
+      c0_status: 'integrated', contract_version: '0.1.0', llm_status: 'not_configured' });
     const response = await call('/');
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain('MOCK');
+    expect(await response.text()).toContain('本地模拟付款');
     expect(response.headers.get('content-security-policy')).toContain("script-src 'self'");
     expect((await call('/app.js')).status).toBe(200);
     expect((await call('/styles.css')).status).toBe(200);

@@ -1,19 +1,20 @@
 import { FlowError } from './errors';
+import { yuanToMinor } from '@ocp-catalog/shopping-contracts';
 import type { Candidate, Intent, Quote } from './types';
 
-export function parseIntent(input: unknown): Intent {
+export function parseIntent(input: unknown, trustedMerchants: readonly string[] = ['coffee-demo']): Intent {
   if (!input || typeof input !== 'object') throw new FlowError('invalid_request', '请填写购物需求。');
   const value = input as Record<string, unknown>;
   if (typeof value.query !== 'string' || !value.query.trim() || value.query.length > 500
     || !Number.isSafeInteger(value.quantity) || (value.quantity as number) < 1 || (value.quantity as number) > 20
     || value.currency !== 'CNY' || !Number.isSafeInteger(value.max_total_minor)
     || (value.max_total_minor as number) < 1 || (value.max_total_minor as number) > 1_000_000
-    || value.merchant_id !== 'coffee-demo' || value.fulfillment !== 'pickup') {
+    || typeof value.merchant_id !== 'string' || !trustedMerchants.includes(value.merchant_id) || value.fulfillment !== 'pickup') {
     throw new FlowError('invalid_request', '请使用本地咖啡店、人民币整数分预算、1–20 杯及到店自取。');
   }
   return {
     query: value.query.trim(), quantity: value.quantity as number, currency: 'CNY',
-    max_total_minor: value.max_total_minor as number, merchant_id: 'coffee-demo', fulfillment: 'pickup',
+    max_total_minor: value.max_total_minor as number, merchant_id: value.merchant_id, fulfillment: 'pickup',
   };
 }
 
@@ -24,7 +25,7 @@ export function assertQuote(quote: Quote, userId: string, candidate: Candidate, 
     || !quote.quote_id || !quote.terms_hash || !Array.isArray(quote.fees)
     || !Number.isSafeInteger(quote.unit_price_minor) || quote.unit_price_minor < 0
     || !Number.isSafeInteger(quote.total_minor) || quote.total_minor < 0
-    || quote.fees.some(fee => !Number.isSafeInteger(fee.amount_minor) || fee.amount_minor < 0)
+    || quote.fees.some(fee => !Number.isSafeInteger(fee.amount_minor))
     || quote.unit_price_minor * quote.quantity + quote.fees.reduce((sum, fee) => sum + fee.amount_minor, 0) !== quote.total_minor) {
     throw new FlowError('invalid_quote', '商家报价与所选商品或费用明细不一致。');
   }
@@ -35,12 +36,10 @@ export function assertQuote(quote: Quote, userId: string, candidate: Candidate, 
 }
 
 export function ocpAmountToMinor(amount: number): number {
-  const minor = Math.round(amount * 100);
-  if (!Number.isFinite(amount) || amount < 0 || !Number.isSafeInteger(minor)
-    || Math.abs(amount * 100 - minor) > 1e-7) {
+  try { return yuanToMinor(amount); }
+  catch {
     throw new FlowError('invalid_price', '目录金额无法精确换算为人民币整数分。');
   }
-  return minor;
 }
 
 export function trustedUrl(value: string, origin: string, allowedPaths: readonly string[]): string {

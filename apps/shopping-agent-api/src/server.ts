@@ -1,6 +1,7 @@
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { createMockRuntime, FlowError, publicError, type ShoppingCoordinator } from '@ocp-catalog/agent-runtime';
+import { createPrivateKey } from 'node:crypto';
+import { createHttpRuntime, createMockRuntime, FlowError, publicError, type ShoppingCoordinator } from '@ocp-catalog/agent-runtime';
 
 const STATIC_ROOT = resolve(import.meta.dir, '../../shopping-agent-web/public');
 const COOKIE = 'ocp_shopping_session';
@@ -40,7 +41,8 @@ export function createHandler(coordinator: ShoppingCoordinator, options: { allow
         .find(part => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
       const userId = cookieValue && cookiePattern.test(cookieValue) ? cookieValue : (newCookie = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', ''));
       if (url.pathname === '/api/config' && request.method === 'GET') {
-        return response({ mode: 'mock', c0_status: 'pending', llm_status: 'not_configured' });
+        return response({ mode: coordinator.mode, merchant_id: coordinator.merchantId,
+          payment_mode: 'local_simulated', c0_status: 'integrated', contract_version: '0.1.0', llm_status: 'not_configured' });
       }
       if (url.pathname.startsWith('/api/')) {
         let body: Record<string, unknown> = {};
@@ -106,13 +108,30 @@ export async function acquireDataLock(directory: string): Promise<() => Promise<
   return async () => { await unlink(path); };
 }
 
+/** Load explicit local configuration; HTTP startup fails if a signing key or identity is missing. */
+export async function createConfiguredRuntime(directory: string, env: Record<string, string | undefined> = process.env) {
+  const mode = env.SHOPPING_MODE ?? 'http';
+  if (mode === 'mock') return createMockRuntime(directory);
+  if (mode !== 'http') throw new Error('SHOPPING_MODE 必须为 http 或 mock。');
+  function required(name: string) {
+    const value = env[name]?.trim();
+    if (!value) throw new Error(`${name} 是 HTTP 模式必需配置。`);
+    return value;
+  }
+  return createHttpRuntime(directory, {
+    origin: required('SHOPPING_MERCHANT_ORIGIN'), merchantId: required('SHOPPING_MERCHANT_ID'),
+    catalogId: required('SHOPPING_CATALOG_ID'), issuer: required('SHOPPING_AUTH_ISSUER'),
+    keyId: required('SHOPPING_AUTH_KEY_ID'), privateKey: createPrivateKey(await readFile(required('SHOPPING_AUTH_PRIVATE_KEY_PATH'), 'utf8')),
+  });
+}
+
 if (import.meta.main) {
   const port = Number(process.env.SHOPPING_PORT ?? 4310);
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error('SHOPPING_PORT 必须为 1024–65535。');
   const directory = resolve(process.env.SHOPPING_DATA_DIR ?? join(import.meta.dir, '../../../.codex-tmp/shopping-agent'));
   const release = await acquireDataLock(directory);
   try {
-    const coordinator = await createMockRuntime(directory);
+    const coordinator = await createConfiguredRuntime(directory);
     const server = Bun.serve({ hostname: '127.0.0.1', port, fetch: createHandler(coordinator, { allowedHost: `127.0.0.1:${port}` }) });
     let closing = false;
     const close = async () => {
@@ -120,6 +139,6 @@ if (import.meta.main) {
       await server.stop(false); await release(); process.exit(0);
     };
     process.on('SIGINT', () => { void close(); }); process.on('SIGTERM', () => { void close(); });
-    console.log(`购物助手 MOCK: http://127.0.0.1:${server.port} (C0 pending; LLM not configured; local mock payment only)`);
+    console.log(`购物助手 ${coordinator.mode.toUpperCase()}: http://127.0.0.1:${server.port} (contract 0.1.0; LLM not configured; local simulated payment only)`);
   } catch (error) { await release(); throw error; }
 }

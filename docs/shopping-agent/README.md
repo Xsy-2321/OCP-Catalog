@@ -1,56 +1,53 @@
-# A 侧本地购物助手
+# 本地购物助手
 
-这是 `docs/team-development/AGENT_A.md` 的第一阶段实现。界面、API、购买协调、明确确认和恢复逻辑属于 A。默认且唯一可运行模式为 **deterministic mock**：商品与交易来自 A 的固定开发 transport，付款仅为模拟，没有真实 LLM 或外部商业调用。
+项目由用户独立维护。默认主运行路径为本地 **HTTP**：A 页面/API 通过 OCP 搜索与 Resolve 访问 B Coffee API，在用户明确确认后签发共同 Ed25519 授权。B 使用持久 SQLite 保存库存、购买尝试、模拟支付、订单及幂等结果。付款仍为本地模拟；真实 LLM 尚未配置。
 
 ## 启动
 
-在仓库根目录执行（要求 Bun 1.3+）：
+使用根 packageManager 固定的 **Bun 1.3.13**：
 
 ```powershell
-bun install --ignore-scripts
+bun install --frozen-lockfile
 bun run shopping:check
 bun run shopping:test
 bun run shopping:build
-bun run shopping:start
 ```
 
-打开 `http://127.0.0.1:4310`。如果 PowerShell 找不到 Bun，本机可用 `C:\Users\xsy\.bun\bin\bun.exe`；运行根脚本前把它所在目录加入当前终端 PATH。
+先按 [Coffee API 说明](../../apps/coffee-merchant-api/README.md) 在独立目录启动 B，配置 MERCHANT_DB_PATH、MERCHANT_PUBLIC_BASE_URL 与受信公钥。MERCHANT_TRUSTED_KEYS_PATH 是 JSON 文件，每个 key ID 对应 `{ "public_key_pem": "公钥 PEM", "issuer": "agent_a_demo" }`。不接受只有 PEM 的旧配置。
 
-默认数据保存在仓库 `.codex-tmp/shopping-agent`。其中包含本地会话、用户归属、报价、稳定的购买尝试 ID/幂等键和固定 mock 结果；没有持久化签名私钥或可用的授权证明。目录仅用于开发，请保留它以测试重启恢复。同一个数据目录只允许一个 API 进程使用。
+A 环境变量见 [配置样例](../../apps/shopping-agent-api/.env.example)。在启动 A 的终端设置 SHOPPING_MODE=http、商家 origin/merchant/catalog、issuer/key ID 和后端私钥文件路径，再运行 `bun run shopping:start`，打开 http://127.0.0.1:4310。公钥只由 B 读取，私钥只由 A 后端读取；签名证明仅存在于明确确认到 Checkout 之间的内存，不进入持久会话或 UI。商户来源和操作路径由配置限定；HTTP 配置或服务失败不会自动切换 mock。
 
-可设置 `SHOPPING_PORT`（默认 4310）和 `SHOPPING_DATA_DIR`（显式本地目录）。服务只监听 `127.0.0.1`，请使用该地址访问。启动时用 `server.lock` 拒绝同目录的第二个实例；正常 Ctrl+C 会释放锁。异常终止留下锁时不会自动删除：先检查锁记录的 PID 与实际进程，确认旧服务已经退出，再手动移除该目录里的 `server.lock`；如果不能确认，换一个新的开发数据目录。不得为了恢复自动清空原会话和订单数据。
+两份配置样例统一指向 B 的 `http://127.0.0.1:8787`。本地模拟可使用公开测试 seed 的 key（只能用于测试）：
 
-## 使用
+```powershell
+bun fixtures/shopping/keys/derive-test-keys.ts
+New-Item -ItemType Directory -Force .codex-tmp/shopping-http | Out-Null
+Copy-Item fixtures/shopping/keys/agent_a_test.private.pem .codex-tmp/shopping-http/agent-private.pem
+```
 
-1. 输入需求、杯数与人民币总预算。预算包含所有收费，默认到店自取。
-2. 查看候选目录价格，再点击候选取得最终报价。
-3. 检查商品、数量、费用、含费总额、到期时间；只有明确点击确认才会签发 mock 许可并结账。取消不会结账。
-4. 分别查看模拟付款状态与制作/取餐状态。“模拟已支付、制作中”不等于已经取餐。
-5. 刷新页面会读取原会话。结果未知时只查询原尝试，不换 key 重买。结账已确定拒绝后，需由用户明确发起新需求；旧授权不会用于新报价。
+B 按其 README 生成 trusted-keys.json；双方保持 `agent_a_test` / `agent_a_demo` 一致。上述脚本生成的私钥文件和运行目录已忽略。B 的环境文件位于 Coffee app 工作目录；A 的样例需在 A 启动终端设置，私钥/数据路径建议用绝对路径，避免工作目录不同导致读不到文件。
 
-固定样例：经典拿铁目录价 26 元，打包服务费 2 元，总价 28 元；特调拿铁目录价 29 元，含费总价 31 元，会被 30 元总预算拒绝。售罄样例不会进入可购买候选。两杯经典拿铁加费共 54 元，不会被 30 元预算接受。
+可显式设置 SHOPPING_MODE=mock 运行 A 独立固定样例。此模式的经典拿铁含费28元；B的拿铁自取报价为25元。UI 根据 /api/config 显示实际 transport 和模拟付款。
 
-API 使用本地随机 HttpOnly 会话 cookie 核对资源归属；这不是生产账户系统。浏览器 localStorage 只保存会话 ID。POST 的来源/内容类型受限，不能将模型的 `approved:true` 当作许可。
+默认 A 会话在 .codex-tmp/shopping-agent，建议 HTTP 联调设置独立 SHOPPING_DATA_DIR。同一 A 数据目录只允许一个 API 进程。正常关闭释放 server.lock；异常退出可能留下锁，先检查锁记录 PID 和原进程，确认退出后手动移除锁或改用新目录。不得清空原会话来绕过未知购买状态。
 
-## 模块
+会话目录绑定 mode、商家 origin、merchant_id 和 catalog_id。改变其中任何一项会拒绝复用该目录；切换环境时选择新的独立目录，并保留旧环境的未决交易恢复资料。同一配置可以轮换签发 key/issuer，但 B 必须同步信任配置。
 
-- `apps/shopping-agent-web`：中文静态界面。
-- `apps/shopping-agent-api`：仅本机监听的 HTTP API、会话身份、确认路由和静态文件服务。
-- `packages/agent-runtime`：内部 read models、MerchantPort、协调状态、文件存储、签名 mock issuer、固定 transport、受限 planner/tool loop 和只读 OCP consumer。
-- `tests/shopping-e2e`：通过真实本地 HTTP 验证 A API 的流程与隔离；没有冒充对 B 的联合验收。
+## 使用与恢复
 
-Runtime 的模型工具仅能搜索、请求报价、查看状态；确认、签发许可及结账不在工具清单中。`Planner` 是可注入的接口，`DeterministicMockPlanner` 是明确标识的 mock。未提供和验证真实模型配置，因此 C4 尚未完成。
+1. 输入商品关键词、杯数和包含全部收费的人民币总预算。当前流程使用固定关键词检索，页面不提供真实自然语言理解。
+2. 从目录候选取得最终报价；目录筛选后仍复核币种、库存和整数分金额。
+3. 检查条款，明确点击确认才会签发授权和结账。模型说“已批准”和取消操作都不能购买。
+4. 分开查看付款与履约状态。B 的 pending 显示“待履约”；付款成功不表示咖啡开始制作或已经取餐。
+5. 确定拒绝后可选择候选重新报价，旧失败尝试保存到历史，新条款必须重新确认。旧确认或许可不能购买新报价。
+6. 202、响应丢失、5xx、协议/订单校验故障或查询404都保持未知，保留原 attempt/key，并在同一用户的所有会话中锁住新购买、取消及商品替换。刷新和“查询原购买结果”只恢复原尝试。已经收到的合法 confirmed attempt 不会因为后续畸形订单或倒退状态而被当作可重买的失败。
 
-## 验证与限制
+浏览器使用随机 HttpOnly cookie 标识本地用户。A 将同一个后端会话身份作为 B caller 和授权 user；这只是本地开发身份，不能当作生产登录。localStorage 仅保存会话 ID。
 
-`shopping:test` 覆盖用户确认、含费预算、重复点击、失效报价、缺货/改价/模拟付款失败、响应丢失、重启恢复、资源归属、凭证不入持久化及工具边界。故障选项仅供测试构造 transport，不通过普通页面/API 开启。
+## 验证
 
-本地 mock 用串行队列和原子 JSON 替换保存结果，供 A 的流程与恢复测试使用。它不能代替 B 的数据库唯一约束、库存扣减、支付幂等或跨进程保障。商家真实能力及共同端到端验收必须待 B 提供代码后验证。
+`bun run shopping:integration` 运行真实 A HTTP 确认路由 → B 正式 bootstrap socket → 独立 SQLite 的联合测试；shopping:test 同时保留 A 独立 mock 和 transport 边界回归。B 单侧测试包含跨连接/进程库存争抢、异常退出、幂等与旧库迁移。
 
-共同 C0 schema/fixtures 尚未落地。A 的 TypeScript 内部 read models **不是第二套共同交易 schema，也不是 OCP 标准**。mock 的 `local-mock-v1` Ed25519 格式和 ephemeral key 仅供开发验证；B 的最终签名 envelope、可信 key 配置、terms_hash 和请求摘要规则仍待共同冻结。不会自动把 mock transport 切到未知 HTTP 服务。
+页面验收可启动 `bun tests/shopping-e2e/browser-http-server.ts`，使用独立 SHOPPING_BROWSER_DATA_DIR。将输出的 A URL 设置为 SHOPPING_PREVIEW_URL，然后执行 `node tests/shopping-e2e/browser-http-check.mjs`。它需要已有 Playwright/Chrome，可设置 SHOPPING_PLAYWRIGHT_PATH 和 SHOPPING_BROWSER_EXE，使用独立无头 context，验证用户确认、真实 B 报价、付款/履约分离以及成交响应丢失后的刷新恢复。证据默认写入 .codex-tmp/integration/browser-evidence。
 
-只读 `OcpConsumer` 采用 OcpClient API 的受保护子类及现有 schema/查询校验器：无凭据、拒绝重定向，强制预配置 origin 与第一版标准路径。它根据真实 manifest 声明选择 pack 和 filters；声明不足时仅复核返回页并明确警告，不能保证目录召回全部合适商品。checkout action ID 需由共同契约显式配置。现阶段不实现或猜测 commerce HTTP wire contract，也不向 HTTP 地址发送购买授权。
-
-可选浏览器检查：`tests/shopping-e2e/browser-check.mjs` 用 Playwright 和独立无头浏览器 context 操作已启动的本地 mock 预览；需要本机已有 Playwright/Chromium，或通过 `SHOPPING_PLAYWRIGHT_PATH`、`SHOPPING_BROWSER_EXE` 指定已有安装。它不会读取用户浏览器 profile。截图和 `report.json` 保存在 `.codex-tmp/shopping-browser-qa`。这不是日常启动的前置条件。
-
-参见 [C0 接口评审](./C0-REVIEW.md) 与 [本阶段交付](./STATUS.md)。
+共同契约版本为0.1.0，共享 schema、authorizationSigningBytes、computeTermsHash 和精确金额函数。仅属于 demo 应用扩展，不修改 OCP 标准。真实 LLM、生产身份、外部支付和生产部署不在本轮范围内。当前完成情况和实际门禁见 [验收报告](../team-development/INTEGRATION-ACCEPTANCE.md)。

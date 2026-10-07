@@ -30,7 +30,7 @@ function confirmation(session: PublicSession) {
   return { quote_id: session.quote!.quote_id, terms_hash: session.quote!.terms_hash, revision: session.revision };
 }
 
-describe('A purchase coordinator (development mock, C0 pending)', () => {
+describe('A purchase coordinator (explicit development mock)', () => {
   test('includes all fees, waits for explicit confirmation, separates payment from fulfillment', async () => {
     const { coordinator, merchant } = setup();
     const quoted = await ready(coordinator);
@@ -91,11 +91,19 @@ describe('A purchase coordinator (development mock, C0 pending)', () => {
     const { coordinator, merchant } = setup({ fault });
     const quoted = await ready(coordinator);
     const result = await coordinator.confirm('alice', quoted.id, confirmation(quoted));
-    expect(result.phase).toBe('failed');
+    expect(result.phase).toBe(fault === 'requote_required' ? 'requote_required' : 'failed');
     expect(result.error!.code).toBe(fault);
     expect(result.order).toBeUndefined();
     expect(await merchant.diagnostics()).toEqual({ payment_count: 0, order_count: 0 });
-    await expect(coordinator.select('alice', quoted.id, 'mock_latte')).rejects.toMatchObject({ code: 'invalid_state' });
+    const duplicate = await coordinator.confirm('alice', quoted.id, confirmation(quoted));
+    expect(duplicate.attempt!.purchase_attempt_id).toBe(result.attempt!.purchase_attempt_id);
+    expect(merchant.checkoutCalls).toBe(1);
+    const fresh = await coordinator.select('alice', quoted.id, 'mock_latte');
+    expect(fresh.phase).toBe('awaiting_confirmation');
+    expect(fresh.attempt).toBeUndefined();
+    expect(fresh.attempt_history).toHaveLength(1);
+    expect(fresh.attempt_history![0]!.purchase_attempt_id).toBe(result.attempt!.purchase_attempt_id);
+    await expect(coordinator.confirm('alice', quoted.id, confirmation(quoted))).rejects.toMatchObject({ code: 'confirmation_mismatch' });
   });
   test('lost success response recovers the original order after runtime restart, without repurchasing', async () => {
     const { coordinator, merchant } = setup({ fault: 'response_lost' });
@@ -129,6 +137,86 @@ describe('A purchase coordinator (development mock, C0 pending)', () => {
     expect((await coordinator.confirm('alice', quoted.id, confirmation(quoted))).phase).toBe('unknown');
     expect((await coordinator.recover('alice', quoted.id)).phase).toBe('unknown');
     expect(await merchant.diagnostics()).toEqual({ payment_count: 0, order_count: 0 });
+  });
+  test('malformed failure error stays unknown with redacted protocol diagnostics and original attempt', async () => {
+    const { coordinator, merchant, store } = setup();
+    const quoted = await ready(coordinator);
+    merchant.checkout = async input => ({ purchase_attempt_id: input.purchase_attempt_id, status: 'failed',
+      error: { code: 42, message: { signature: 'secret-proof' } } } as never);
+    const unknown = await coordinator.confirm('alice', quoted.id, confirmation(quoted));
+    expect(unknown.phase).toBe('unknown');
+    expect(unknown.error!.code).toBe('result_unknown');
+    expect(unknown.diagnostic!.category).toBe('protocol');
+    const saved = await store.read(quoted.id);
+    expect(saved!.attempt!.status).toBe('processing');
+    expect(JSON.stringify(saved)).not.toContain('secret-proof');
+    await expect(coordinator.select('alice', quoted.id, 'mock_latte')).rejects.toMatchObject({ code: 'invalid_state' });
+    const recovered = await coordinator.recover('alice', quoted.id);
+    expect(recovered.phase).toBe('unknown');
+    expect(recovered.diagnostic!.category).toBe('not_found');
+    expect(recovered.attempt!.purchase_attempt_id).toBe(unknown.attempt!.purchase_attempt_id);
+  });
+  test('idempotency conflict cannot unlock a new key or silently repurchase', async () => {
+    const { coordinator, merchant } = setup();
+    const quoted = await ready(coordinator);
+    merchant.checkout = async () => { throw new FlowError('idempotency_conflict', 'conflict'); };
+    const unknown = await coordinator.confirm('alice', quoted.id, confirmation(quoted));
+    expect(unknown.phase).toBe('unknown');
+    await expect(coordinator.search('alice', quoted.id)).rejects.toMatchObject({ code: 'invalid_state' });
+    await expect(coordinator.cancel('alice', quoted.id)).rejects.toMatchObject({ code: 'invalid_state' });
+    expect((await coordinator.confirm('alice', quoted.id, confirmation(quoted))).attempt!.purchase_attempt_id)
+      .toBe(unknown.attempt!.purchase_attempt_id);
+  });
+  test('confirmed merchant attempt cannot regress into a failure that unlocks repurchase', async () => {
+    const { coordinator, merchant } = setup();
+    const quoted = await ready(coordinator);
+    const paid = await coordinator.confirm('alice', quoted.id, confirmation(quoted));
+    merchant.getAttempt = async (_user, attempt) => ({ purchase_attempt_id: attempt, status: 'failed',
+      error: { code: 'payment_failed', message: 'declined' } });
+    const result = await coordinator.recover('alice', quoted.id);
+    expect(result.phase).toBe('unknown');
+    expect(result.order).toBeUndefined();
+    expect(result.attempt!.status).toBe('confirmed');
+    expect(result.attempt!.purchase_attempt_id).toBe(paid.attempt!.purchase_attempt_id);
+    await expect(coordinator.select('alice', quoted.id, 'mock_latte')).rejects.toMatchObject({ code: 'invalid_state' });
+  });
+  test('an order-query authorization failure after confirmed checkout still locks the original purchase', async () => {
+    const { coordinator, merchant } = setup();
+    const quoted = await ready(coordinator);
+    merchant.getOrder = async () => { throw new FlowError('unauthorized', 'denied order query'); };
+    const result = await coordinator.confirm('alice', quoted.id, confirmation(quoted));
+    expect(result.phase).toBe('unknown');
+    expect(result.attempt!.status).toBe('confirmed');
+    await expect(coordinator.search('alice', quoted.id)).rejects.toMatchObject({ code: 'invalid_state' });
+    expect(await merchant.diagnostics()).toEqual({ payment_count: 1, order_count: 1 });
+  });
+  test('unknown purchase blocks another same-user session, including across runtime restart', async () => {
+    const { coordinator, merchant } = setup({ fault: 'response_lost' });
+    const first = await ready(coordinator);
+    const second = await ready(coordinator);
+    expect((await coordinator.confirm('alice', first.id, confirmation(first))).phase).toBe('unknown');
+    await expect(coordinator.create('alice', intent)).rejects.toMatchObject({ code: 'unresolved_purchase' });
+    await expect(coordinator.confirm('alice', second.id, confirmation(second))).rejects.toMatchObject({ code: 'unresolved_purchase' });
+    const restarted = await createMockRuntime(directory);
+    await expect(restarted.create('alice', intent)).rejects.toMatchObject({ code: 'unresolved_purchase' });
+    expect((await restarted.recover('alice', first.id)).phase).toBe('confirmed');
+    expect((await restarted.create('alice', intent)).phase).toBe('new');
+    expect(await merchant.diagnostics()).toEqual({ payment_count: 1, order_count: 1 });
+  });
+  test('persistent scope refuses switching backend mode or origin while allowing same-scope restart', async () => {
+    const runtime = await createMockRuntime(directory);
+    const quoted = await ready(runtime);
+    const store = new FileSessionStore(join(directory, 'sessions'));
+    await expect(store.bindScope({ mode: 'http', origin: 'http://127.0.0.1:4401',
+      merchant_id: 'merchant_coffee_demo', catalog_id: 'catalog_coffee_demo' })).rejects.toThrow('不同模式');
+    await expect(store.bindScope({ mode: 'mock', origin: 'http://127.0.0.1:9999',
+      merchant_id: 'coffee-demo', catalog_id: 'mock_coffee_catalog' })).rejects.toThrow('不同模式');
+    await expect(store.bindScope({ mode: 'mock', origin: MOCK_ORIGIN,
+      merchant_id: 'coffee-demo', catalog_id: 'other_catalog' })).rejects.toThrow('不同模式');
+    await expect(store.bindScope({ mode: 'mock', origin: MOCK_ORIGIN,
+      merchant_id: 'other_merchant', catalog_id: 'mock_coffee_catalog' })).rejects.toThrow('不同模式');
+    const restarted = await createMockRuntime(directory);
+    expect((await restarted.get('alice', quoted.id)).quote!.quote_id).toBe(quoted.quote!.quote_id);
   });
   test('foreign users cannot inspect, confirm, recover or cancel another user session', async () => {
     const { coordinator } = setup();

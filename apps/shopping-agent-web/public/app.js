@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const storageKey = 'ocp-shopping-session-id';
-  let session = null, busy = false, transportUncertain = false, transient = { text: '', kind: '' };
+  let session = null, busy = false, transportUncertain = false, configuration = null, transient = { text: '', kind: '' };
   const money = minor => `¥${(minor / 100).toFixed(2)}`;
   const node = (tag, text, className) => { const element = document.createElement(tag); if (text !== undefined) element.textContent = text; if (className) element.className = className; return element; };
   function showNotice(text, kind = '') { $('notice').textContent = text; $('notice').className = kind; $('notice').hidden = !text; }
@@ -15,6 +15,7 @@
     return result;
   }
   const locked = () => Boolean(transportUncertain || (session && ['unknown', 'checkout_pending'].includes(session.phase)));
+  const activeAttempt = () => Boolean(session?.attempt && session.attempt.status !== 'failed');
   function render() {
     const phase = session?.phase || 'new';
     const step = session?.attempt ? 3 : session?.quote ? 2 : session?.candidates?.length ? 1 : 0;
@@ -29,7 +30,7 @@
       const bottom = node('div', undefined, 'card-bottom');
       const price = node('span', money(candidate.search_price_minor), 'price'); price.append(node('small', '/ 杯 · 目录价'));
       const button = node('button', '查看最终报价', 'secondary'); button.type = 'button';
-      button.disabled = busy || locked() || Boolean(session.attempt) || phase === 'cancelled';
+      button.disabled = busy || locked() || activeAttempt() || phase === 'cancelled';
       button.addEventListener('click', () => action('quote', { entry_id: candidate.entry_id }));
       bottom.append(price, button); card.append(bottom); $('candidates').append(card);
     }
@@ -46,17 +47,17 @@
       line('履约方式', '到店自取', $('quote-content'));
     }
     $('confirm-button').disabled = busy || transportUncertain || phase !== 'awaiting_confirmation' || Boolean(session?.attempt);
-    $('cancel-button').disabled = busy || locked() || Boolean(session?.attempt) || phase === 'cancelled';
+    $('cancel-button').disabled = busy || locked() || activeAttempt() || phase === 'cancelled';
     $('order-section').hidden = !session?.attempt && !transportUncertain;
     $('order-content').replaceChildren();
     if (session?.attempt) {
-      $('order-heading').textContent = phase === 'confirmed' ? '模拟订单已确认' : phase === 'failed' ? '本次模拟购买未成功' : '购买结果待查询';
+      $('order-heading').textContent = phase === 'confirmed' ? '模拟订单已确认' : session.attempt.status === 'failed' ? '本次模拟购买未成功' : '购买结果待查询';
       if (session.order) {
         const order = session.order;
         line(`${order.title} × ${order.quantity}`, money(order.total_minor), $('order-content'));
         const grid = node('div', undefined, 'status-grid');
-        for (const [label, value] of [['模拟付款', { paid: '模拟已支付', pending: '处理中', failed: '失败' }[order.payment_status]],
-          ['制作 / 取餐', { preparing: '制作中', ready: '待取餐', collected: '已取餐' }[order.fulfillment_status]]]) {
+        for (const [label, value] of [['模拟付款', { paid: '模拟已支付', pending: '处理中', failed: '失败', unknown: '结果未知' }[order.payment_status]],
+          ['制作 / 取餐', { pending: '待履约', preparing: '制作中', ready: '待取餐', collected: '已取餐', completed: '已取餐', cancelled: '已取消' }[order.fulfillment_status]]]) {
           const cell = node('div', undefined, 'status-cell'); cell.append(node('small', label), node('span', value)); grid.append(cell);
         }
         $('order-content').append(grid, node('p', `订单号：${order.order_id}`, 'order-id'));
@@ -106,8 +107,9 @@
     const [whole, decimals = ''] = value.split('.'); const minor = Number(whole) * 100 + Number(decimals.padEnd(2, '0'));
     transient = { text: '', kind: '' }; busy = true; render();
     try {
+      if (!configuration) throw new Error('商家配置尚未加载。');
       session = await api('/api/sessions', { query: $('query').value, quantity: Number($('quantity').value), currency: 'CNY',
-        max_total_minor: minor, merchant_id: 'coffee-demo', fulfillment: 'pickup' });
+        max_total_minor: minor, merchant_id: configuration.merchant_id, fulfillment: 'pickup' });
       remember(); session = await api(`/api/sessions/${session.id}/search`, {});
     } catch (error) { notify(error.message || '搜索连接暂时不可用。', 'error'); }
     finally { busy = false; render(); }
@@ -121,7 +123,11 @@
   async function initialize() {
     busy = true; render();
     try {
-      await api('/api/config');
+      configuration = await api('/api/config');
+      $('mode-label').textContent = configuration.mode === 'http' ? 'HTTP · 本地模拟付款' : 'MOCK · 本地演示';
+      $('runtime-note').textContent = configuration.mode === 'http'
+        ? '商家 HTTP 已连接 · 本地模拟付款\n真实模型未配置 · 每笔由你确认'
+        : '固定样例流程 · 本地模拟付款\n真实模型未配置';
       const id = localStorage.getItem(storageKey);
       if (id) {
         try { session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (session.attempt) session = await api(`/api/sessions/${session.id}/recover`, {}); }

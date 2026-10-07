@@ -1,0 +1,64 @@
+{
+  "ocp_version": "1.0",
+  "kind": "CatalogQueryResult",
+  "id": "qry_fixture_latte",
+  "catalog_id": "catalog_coffee_demo",
+  "query_pack": "ocp.query.keyword.v1",
+  "query_mode": "keyword",
+  "query": "拿铁",
+  "result_count": 1,
+  "page": {
+    "limit": 20,
+    "offset": 0,
+    "has_more": false
+  },
+  "entries": [
+    {
+      "entry": {
+        "kind": "CatalogEntry",
+        "catalog_id": "catalog_coffee_demo",
+        "entry_id": "entry_latte",
+        "provider_id": "provider_coffee_demo",
+        "object_id": "obj_entry_latte",
+        "object_type": "ocp.commerce.product",
+        "title": "拿铁",
+        "summary": "标准杯拿铁，中深烘拼配豆。",
+        "attributes": {
+          "brand": "演示咖啡",
+          "category": "coffee",
+          "price": {
+            "currency": "CNY",
+            "amount": 25,
+            "price_type": "fixed"
+          },
+          "price_minor": 2500,
+          "inventory": {
+            "availability_status": "in_stock",
+            "quantity": 12
+          },
+          "fulfillment": {
+            "methods": [
+              "pickup",
+              "delivery"
+            ],
+            "delivery_fee_minor": 500
+          }
+        }
+      },
+      "score": 1,
+      "explain": [
+        "Keyword match for \"拿铁\"."
+      ]
+    }
+  ],
+  "policy_summary": {
+    "selected_capability_id": "ocp.demo.coffee.search.v1",
+    "selected_query_pack": "ocp.query.keyword.v1",
+    "query_mode": "keyword",
+    "supports_explain": true,
+    "accepted_filters": [],
+    "rejected_filters": [],
+    "warnings": []
+  },
+  "explain": []
+}

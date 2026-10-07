@@ -10,7 +10,8 @@
     "examples/typescript",
     "apps/ocp-site-web",
     "apps/shopping-agent-api",
-    "apps/shopping-agent-web"
+    "apps/shopping-agent-web",
+    "apps/coffee-merchant-api"
   ],
   "scripts": {
     "dev": "turbo dev",
@@ -28,6 +29,8 @@
     "shopping:start": "bun run --cwd apps/shopping-agent-api start",
     "shopping:check": "bun run --cwd packages/agent-runtime typecheck && bun run --cwd apps/shopping-agent-api typecheck && bun run --cwd apps/shopping-agent-web typecheck && tsc -p tests/shopping-e2e/tsconfig.json --noEmit",
     "shopping:test": "bun test packages/agent-runtime apps/shopping-agent-api tests/shopping-e2e",
+    "coffee:check": "bun run --cwd apps/coffee-merchant-api check && bun run --cwd apps/coffee-merchant-api typecheck",
+    "shopping:integration": "bun test tests/shopping-e2e/http-flow.test.ts",
     "shopping:build": "bun run --cwd packages/agent-runtime build && bun run --cwd apps/shopping-agent-api build && bun run --cwd apps/shopping-agent-web build"
   },
   "devDependencies": {

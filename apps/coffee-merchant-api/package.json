@@ -1,0 +1,17 @@
+{
+  "name": "@ocp-catalog/coffee-merchant-api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Bun.serve bootstrap for the local demo coffee merchant. NOT part of the OCP Catalog standard.",
+  "scripts": {
+    "start": "bun src/server.ts",
+    "check": "bun src/server.ts --check",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test --pass-with-no-tests"
+  },
+  "dependencies": {
+    "@ocp-catalog/merchant-core": "workspace:*"
+  }
+}

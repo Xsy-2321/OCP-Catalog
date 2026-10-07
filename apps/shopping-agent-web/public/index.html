@@ -7,13 +7,13 @@
 </head>
 <body>
   <div class="page">
-    <header><a class="brand" href="/" aria-label="一杯之间首页"><span class="brand-icon">☕</span><span>一杯之间<small>YOUR COFFEE COMPANION</small></span></a><span class="mode"><i></i> MOCK · 本地演示</span></header>
+    <header><a class="brand" href="/" aria-label="一杯之间首页"><span class="brand-icon">☕</span><span>一杯之间<small>YOUR COFFEE COMPANION</small></span></a><span class="mode"><i></i> <span id="mode-label">本地模拟付款</span></span></header>
     <main>
-      <section class="intro"><p class="eyebrow">A LITTLE COFFEE. A CLEAR DECISION.</p><h1>从一句想喝，<br>到一杯安心。</h1><p>找到喜欢的咖啡，看看完整的价格。<br>每一次购买，都由你亲自确认。</p><div class="intro-note">固定样例流程 · 模拟付款<br>真实模型未配置 · 商家 HTTP 待联调</div></section>
+      <section class="intro"><p class="eyebrow">A LITTLE COFFEE. A CLEAR DECISION.</p><h1>从一句想喝，<br>到一杯安心。</h1><p>找到喜欢的咖啡，看看完整的价格。<br>每一次购买，都由你亲自确认。</p><div class="intro-note" id="runtime-note">本地模拟付款 · 真实模型未配置</div></section>
       <section class="workspace" aria-label="咖啡购物流程">
         <nav class="steps" aria-label="流程步骤"><span data-step="0">01 说说需求</span><span data-step="1">02 看看候选</span><span data-step="2">03 确认报价</span><span data-step="3">04 查看订单</span></nav>
         <section class="request-card"><div class="section-heading"><div><p class="eyebrow">LET'S START HERE</p><h2>今天，想喝什么？</h2></div><span class="shop-tag">本地咖啡店 · 自取</span></div>
-          <form id="intent-form"><label for="query">告诉助手你的需求</label><textarea id="query" maxlength="500" rows="2" required>想喝一杯拿铁，30 元以内</textarea><div class="form-row"><label for="budget">总预算（含所有费用）<div class="input-wrap"><span>¥</span><input id="budget" type="text" inputmode="decimal" value="30.00" required></div></label><label for="quantity">杯数<input id="quantity" type="number" min="1" max="20" value="1" required></label><button class="primary" type="submit" id="search-button">寻找咖啡 <span>↗</span></button></div></form>
+          <form id="intent-form"><label for="query">商品关键词（当前为固定搜索流程）</label><textarea id="query" maxlength="500" rows="2" required>拿铁</textarea><div class="form-row"><label for="budget">总预算（含所有费用）<div class="input-wrap"><span>¥</span><input id="budget" type="text" inputmode="decimal" value="30.00" required></div></label><label for="quantity">杯数<input id="quantity" type="number" min="1" max="20" value="1" required></label><button class="primary" type="submit" id="search-button">寻找咖啡 <span>↗</span></button></div></form>
         </section>
         <div id="notice" role="status" aria-live="polite" hidden></div>
         <section id="candidates-section" hidden><div class="section-heading"><h2>为你找到的咖啡</h2><span class="muted">目录价 · 最终费用请看报价</span></div><div id="candidates" class="candidates"></div></section>
@@ -22,6 +22,6 @@
         <div class="empty" id="empty"><span class="cup-line">☕</span><p>一杯好咖啡，从你的选择开始。</p><small>所有价格与订单均为固定开发样例。</small></div>
         <footer>人民币整数分计价 · 全部收费可见 · 逐笔确认</footer>
       </section>
-    </main><div class="page-footer"><span>OCP CATALOG / SHOPPING AGENT A</span><span>C0 契约待冻结 · DETERMINISTIC MOCK</span></div>
+    </main><div class="page-footer"><span>OCP CATALOG / SHOPPING AGENT</span><span>本地演示 · 模拟付款 · 用户逐笔确认</span></div>
   </div>
 </body></html>

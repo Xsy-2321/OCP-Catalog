@@ -6,7 +6,7 @@ import type { Intent } from './types';
 const servers: ReturnType<typeof Bun.serve>[] = [];
 afterEach(async () => { for (const server of servers.splice(0)) await server.stop(true); });
 const intent: Intent = { query: '拿铁', quantity: 1, currency: 'CNY', max_total_minor: 3000, merchant_id: 'coffee-demo', fulfillment: 'pickup' };
-function catalog(options: { filters?: boolean; endpoint?: string; redirect?: boolean; actionUrl?: string; denied?: boolean; identity?: boolean } = {}) {
+function catalog(options: { filters?: boolean; keywordFilters?: boolean; paged?: boolean; repeatedCursor?: boolean; endpoint?: string; redirect?: boolean; actionUrl?: string; denied?: boolean; identity?: boolean } = {}) {
   let base = '';
   const requests: Record<string, unknown>[] = [];
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async request => {
@@ -19,21 +19,27 @@ function catalog(options: { filters?: boolean; endpoint?: string; redirect?: boo
       manifest.catalog_id = 'cat_test';
       for (const [name, endpoint] of Object.entries(manifest.endpoints) as [string, { url: string }][]) endpoint.url = `${base}/ocp/${name}`;
       if (options.endpoint) manifest.endpoints.query.url = options.endpoint;
-      if (options.filters) {
-        manifest.query_capabilities[0].query_packs[0].query_modes = ['hybrid'];
+      if (options.filters || options.keywordFilters) {
+        manifest.query_capabilities[0].query_packs[0].query_modes = options.keywordFilters ? ['keyword'] : ['hybrid'];
         manifest.query_capabilities[0].input_fields = ['currency', 'max_amount', 'in_stock_only'].map(field => ({ name: `filters.${field}` }));
       }
       return Response.json(manifest);
     }
     if (url.pathname === '/ocp/query') {
       const body = await request.json() as Record<string, unknown>; requests.push(body);
-      return Response.json({ ocp_version: '1.0', kind: 'CatalogQueryResult', id: 'query_one', catalog_id: options.identity ? 'other_catalog' : 'cat_test',
-        query_pack: body.query_pack, query: body.query, result_count: 3, page: { limit: 20, offset: 0, has_more: false },
-        entries: [
+      const products = options.paged ? Array.from({ length: 22 }, (_, index) => ({
+        id: index === 21 ? 'latte' : `expensive_${index}`, amount: index === 21 ? 25 : 88,
+        currency: 'CNY', stock: 'in_stock',
+      })).slice(Number(body.cursor ?? 0), Number(body.cursor ?? 0) + 20) : [
           { id: 'latte', amount: 26, currency: 'CNY', stock: 'in_stock' },
           { id: 'usd', amount: 5, currency: 'USD', stock: 'in_stock' },
           { id: 'empty', amount: 26, currency: 'CNY', stock: 'out_of_stock' },
-        ].map(product => ({ score: 1, entry: { kind: 'CatalogEntry', catalog_id: 'cat_test', entry_id: product.id,
+        ];
+      const hasMore = Boolean(options.paged && (!body.cursor || options.repeatedCursor));
+      return Response.json({ ocp_version: '1.0', kind: 'CatalogQueryResult', id: 'query_one', catalog_id: options.identity ? 'other_catalog' : 'cat_test',
+        query_pack: body.query_pack, query: body.query, result_count: products.length,
+        page: { limit: 20, offset: 0, has_more: hasMore, ...(hasMore ? { next_cursor: '20' } : {}) },
+        entries: products.map(product => ({ score: 1, entry: { kind: 'CatalogEntry', catalog_id: 'cat_test', entry_id: product.id,
           provider_id: 'provider', object_id: product.id, title: '拿铁', attributes: { price: { currency: product.currency, amount: product.amount }, inventory: { availability_status: product.stock } } } })),
       });
     }
@@ -51,7 +57,7 @@ function catalog(options: { filters?: boolean; endpoint?: string; redirect?: boo
   const consumer = new OcpConsumer({ origin: base, catalogId: 'cat_test', manifestUrl: `${base}/ocp/manifest`, discoveryUrl: `${base}/.well-known/ocp-catalog`, checkoutActionId: 'checkout_demo' });
   return { consumer, requests, base };
 }
-describe('real HTTP OCP read consumer (commerce C0 still pending)', () => {
+describe('real HTTP OCP read consumer', () => {
   test('uses declared pack/filters, checks actual returned currency/stock/amount and resolves a known entry', async () => {
     const { consumer, requests, base } = catalog({ filters: true });
     const result = await consumer.search(intent);
@@ -61,6 +67,28 @@ describe('real HTTP OCP read consumer (commerce C0 still pending)', () => {
     expect(result.request.query_pack).toBe('ocp.query.keyword.v1');
     expect((await consumer.resolve('latte')).checkout_url).toBe(`${base}/commerce/v1/checkouts`);
     await expect(consumer.resolve('invented')).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+  test('sends filters declared by a keyword pack without claiming hybrid, and verifies every returned item locally', async () => {
+    const { consumer, requests } = catalog({ keywordFilters: true });
+    const result = await consumer.search(intent);
+    expect(result.request.query_mode).toBe('keyword');
+    expect(requests[0]!.filters).toEqual({ currency: 'CNY', max_amount: 30, in_stock_only: true });
+    // This test server deliberately ignores its filters and returns USD and
+    // sold-out rows. The consumer must still reject both of them.
+    expect(result.entries.map(match => match.entry.entry_id)).toEqual(['latte']);
+    expect(result.warnings).toEqual([]);
+  });
+  test('follows cursors to find the only qualifying item at row 22 even when filters are undeclared', async () => {
+    const { consumer, requests } = catalog({ paged: true });
+    const result = await consumer.search(intent);
+    expect(result.entries.map(match => match.entry.entry_id)).toEqual(['latte']);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]!.cursor).toBe('20');
+    expect(requests[0]!.filters).toEqual({});
+  });
+  test('fails closed on a repeated pagination cursor', async () => {
+    await expect(catalog({ paged: true, repeatedCursor: true }).consumer.search(intent))
+      .rejects.toMatchObject({ code: 'catalog_unavailable' });
   });
   test('does not send undeclared filters or claim that the original keyword example filters budget', async () => {
     const { consumer, requests } = catalog();
