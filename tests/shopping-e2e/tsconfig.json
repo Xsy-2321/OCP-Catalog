@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "customConditions": ["bun"] },
+  "include": ["*.ts", "../../apps/shopping-agent-api/src/**/*.ts"]
+}

@@ -8,7 +8,9 @@
   "workspaces": [
     "packages/*",
     "examples/typescript",
-    "apps/ocp-site-web"
+    "apps/ocp-site-web",
+    "apps/shopping-agent-api",
+    "apps/shopping-agent-web"
   ],
   "scripts": {
     "dev": "turbo dev",
@@ -22,7 +24,11 @@
     "site:build": "bun run --cwd apps/ocp-site-web build",
     "skill:sync": "bun scripts/sync-skill-copies.ts",
     "skill:check": "bun scripts/sync-skill-copies.ts --check",
-    "skill:ocp:export": "bun scripts/export-ocp-skill.ts"
+    "skill:ocp:export": "bun scripts/export-ocp-skill.ts",
+    "shopping:start": "bun run --cwd apps/shopping-agent-api start",
+    "shopping:check": "bun run --cwd packages/agent-runtime typecheck && bun run --cwd apps/shopping-agent-api typecheck && bun run --cwd apps/shopping-agent-web typecheck && tsc -p tests/shopping-e2e/tsconfig.json --noEmit",
+    "shopping:test": "bun test packages/agent-runtime apps/shopping-agent-api tests/shopping-e2e",
+    "shopping:build": "bun run --cwd packages/agent-runtime build && bun run --cwd apps/shopping-agent-api build && bun run --cwd apps/shopping-agent-web build"
   },
   "devDependencies": {
     "@types/bun": "^1.3.1",
