@@ -54,7 +54,9 @@ export const orderSchema = z
     total_minor: z.number().int().nonnegative(),
     terms_hash: z.string().regex(/^[0-9a-f]{64}$/),
     fulfillment: quoteFulfillmentSchema,
-    payment: orderPaymentSchema,
+    // The two independent status axes. Note `fulfillment` above is a third,
+    // unrelated field: it is the *method* (pickup/delivery), not a status.
+    payment_status: orderPaymentSchema,
     fulfillment_status: orderFulfillmentSchema,
     created_at: z.string().datetime(),
     updated_at: z.string().datetime(),

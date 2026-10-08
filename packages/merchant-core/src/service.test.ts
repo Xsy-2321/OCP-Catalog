@@ -413,7 +413,7 @@ describe('the commerce surface', () => {
       expect(settled.purchase_attempt.status).toBe('confirmed');
       // Money and coffee are separate facts; a confirmed payment is not a
       // finished drink.
-      expect(settled.order.payment.status).toBe('paid');
+      expect(settled.order.payment_status.status).toBe('paid');
       expect(settled.order.fulfillment_status.status).toBe('pending');
 
       const fetched = await handleRequest(
@@ -425,7 +425,7 @@ describe('the commerce surface', () => {
       expect(fetched.status).toBe(200);
       const order = orderResponseSchema.parse(await readBody(fetched));
       expect(order.order_id).toBe(settled.order.order_id);
-      expect(order.payment.status).toBe('paid');
+      expect(order.payment_status.status).toBe('paid');
 
       // And asking for an id it never had is a 404, not a 500.
       const missing = await handleRequest(

@@ -71,7 +71,7 @@ function makeOrder(): Order {
     total_minor: 5000,
     terms_hash: TERMS_HASH,
     fulfillment: { method: 'pickup', location_id: 'store_zjg' },
-    payment: { status: 'paid', updated_at: '2026-10-07T10:00:05.000Z' },
+    payment_status: { status: 'paid', updated_at: '2026-10-07T10:00:05.000Z' },
     fulfillment_status: { status: 'pending', updated_at: '2026-10-07T10:00:05.000Z' },
     created_at: '2026-10-07T10:00:05.000Z',
     updated_at: '2026-10-07T10:00:05.000Z',

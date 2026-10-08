@@ -46,7 +46,7 @@ function makeOrder(overrides: Partial<Order> = {}): Order {
     total_minor: 5000,
     terms_hash: 'a'.repeat(64),
     fulfillment: { method: 'pickup', location_id: 'store_zjg' },
-    payment: { status: 'paid', updated_at: '2026-10-07T10:00:05.000Z' },
+    payment_status: { status: 'paid', updated_at: '2026-10-07T10:00:05.000Z' },
     fulfillment_status: { status: 'pending', updated_at: '2026-10-07T10:00:05.000Z' },
     created_at: '2026-10-07T10:00:05.000Z',
     updated_at: '2026-10-07T10:00:05.000Z',
@@ -164,33 +164,33 @@ describe('paymentStatusSchema and fulfillmentStatusSchema', () => {
   test('allow payment and fulfillment to disagree, in both directions', () => {
     // Arrange: paid but not made, and made but not paid.
     const paidNotMade = makeOrder({
-      payment: { status: 'paid', updated_at: '2026-10-07T10:00:05.000Z' },
+      payment_status: { status: 'paid', updated_at: '2026-10-07T10:00:05.000Z' },
       fulfillment_status: { status: 'pending', updated_at: '2026-10-07T10:00:05.000Z' },
     });
     const madeNotPaid = makeOrder({
-      payment: { status: 'pending', updated_at: '2026-10-07T10:00:05.000Z' },
+      payment_status: { status: 'pending', updated_at: '2026-10-07T10:00:05.000Z' },
       fulfillment_status: { status: 'ready', updated_at: '2026-10-07T10:00:05.000Z' },
     });
 
     // Act / Assert
-    expect(orderSchema.parse(paidNotMade).payment.status).toBe('paid');
+    expect(orderSchema.parse(paidNotMade).payment_status.status).toBe('paid');
     expect(orderSchema.parse(paidNotMade).fulfillment_status.status).toBe('pending');
     expect(orderSchema.parse(madeNotPaid).fulfillment_status.status).toBe('ready');
-    expect(orderSchema.parse(madeNotPaid).payment.status).toBe('pending');
+    expect(orderSchema.parse(madeNotPaid).payment_status.status).toBe('pending');
   });
 
   test('distinguish an unknown payment outcome from a pending one', () => {
     // Arrange: `unknown` is what a timed-out checkout leaves behind.
     const unknown = makeOrder({
-      payment: { status: 'unknown', updated_at: '2026-10-07T10:00:05.000Z' },
+      payment_status: { status: 'unknown', updated_at: '2026-10-07T10:00:05.000Z' },
     });
 
     // Act
     const parsed = orderSchema.parse(unknown);
 
     // Assert: collapsing these two would tell the user "not paid" when we do not know.
-    expect(parsed.payment.status).toBe('unknown');
-    expect(parsed.payment.status).not.toBe('pending');
+    expect(parsed.payment_status.status).toBe('unknown');
+    expect(parsed.payment_status.status).not.toBe('pending');
   });
 });
 
@@ -246,7 +246,7 @@ describe('orderSchema', () => {
 
   test('rejects a payment block that omits its timestamp', () => {
     // Arrange: a status with no time cannot be ordered against anything else.
-    const timeless = { ...makeOrder(), payment: { status: 'paid' } };
+    const timeless = { ...makeOrder(), payment_status: { status: 'paid' } };
 
     // Act / Assert
     expect(() => orderSchema.parse(timeless)).toThrow();

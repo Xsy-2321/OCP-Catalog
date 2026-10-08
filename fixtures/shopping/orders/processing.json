@@ -24,7 +24,7 @@
   },
   "created_at": "2026-10-07T10:05:00.000Z",
   "updated_at": "2026-10-07T10:05:00.000Z",
-  "payment": {
+  "payment_status": {
     "status": "unknown",
     "updated_at": "2026-10-07T10:05:00.000Z"
   },

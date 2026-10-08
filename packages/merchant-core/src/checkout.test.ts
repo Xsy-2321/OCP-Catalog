@@ -266,7 +266,7 @@ describe('a checkout that should succeed', () => {
 
       // The card clearing is not the coffee being made. A single status field
       // invites exactly that conflation.
-      expect(order.payment.status).toBe('paid');
+      expect(order.payment_status.status).toBe('paid');
       expect(order.fulfillment_status.status).toBe('pending');
     });
   });

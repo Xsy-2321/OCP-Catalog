@@ -221,7 +221,7 @@ export function buildOrder(params: BuildOrderParams): Order {
     total_minor: quote.total_minor,
     terms_hash: quote.terms_hash,
     fulfillment: quote.fulfillment,
-    payment: { status: paymentStatus, updated_at: now },
+    payment_status: { status: paymentStatus, updated_at: now },
     fulfillment_status: { status: params.fulfillmentStatus, updated_at: now },
     created_at: now,
     updated_at: now,

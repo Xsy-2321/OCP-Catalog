@@ -647,7 +647,7 @@ function makeOrder(overrides: Partial<Order>): Order {
 write(
   'orders/confirmed.json',
   makeOrder({
-    payment: { status: 'paid', updated_at: '2026-10-07T10:05:04.000Z' },
+    payment_status: { status: 'paid', updated_at: '2026-10-07T10:05:04.000Z' },
     fulfillment_status: { status: 'pending', updated_at: '2026-10-07T10:05:04.000Z' },
   }),
 );
@@ -659,7 +659,7 @@ write(
   makeOrder({
     order_id: 'ord_fixture_0002',
     purchase_attempt_id: 'att_fixture_0008',
-    payment: { status: 'unknown', updated_at: NOW },
+    payment_status: { status: 'unknown', updated_at: NOW },
     fulfillment_status: { status: 'pending', updated_at: NOW },
     created_at: NOW,
     updated_at: NOW,
@@ -671,7 +671,7 @@ write(
   makeOrder({
     order_id: 'ord_fixture_0003',
     purchase_attempt_id: 'att_fixture_0009',
-    payment: { status: 'failed', updated_at: '2026-10-07T10:05:04.000Z' },
+    payment_status: { status: 'failed', updated_at: '2026-10-07T10:05:04.000Z' },
     fulfillment_status: { status: 'cancelled', updated_at: '2026-10-07T10:05:04.000Z' },
   }),
 );

@@ -427,7 +427,7 @@ describe('attempt and order fixtures', () => {
     const order = orderSchema.parse(readJson('orders/confirmed.json'));
 
     // Assert: the two statuses are independent, and this pairing is the normal one.
-    expect(order.payment.status).toBe('paid');
+    expect(order.payment_status.status).toBe('paid');
     expect(order.fulfillment_status.status).toBe('pending');
   });
 
@@ -436,7 +436,7 @@ describe('attempt and order fixtures', () => {
     const order = orderSchema.parse(readJson('orders/processing.json'));
 
     // Assert: `unknown`, not `pending` — the difference is whether a retry is safe.
-    expect(order.payment.status).toBe('unknown');
+    expect(order.payment_status.status).toBe('unknown');
   });
 
   test('the failed order is neither paid nor fulfilled', () => {
@@ -444,7 +444,7 @@ describe('attempt and order fixtures', () => {
     const order = orderSchema.parse(readJson('orders/failed.json'));
 
     // Assert
-    expect(order.payment.status).toBe('failed');
+    expect(order.payment_status.status).toBe('failed');
     expect(order.fulfillment_status.status).toBe('cancelled');
   });
 
