@@ -57,6 +57,29 @@ bun run start
 startup summary and exits — useful when the port is busy and you want to know
 whether the problem is configuration or the socket.
 
+`--clear` deletes every row from the merchant's data tables and exits. Two things
+gate it, and both come from contract §11 D10 (*"清空数据工具只作用于显式测试存储，
+默认不自动清空"*):
+
+- **`MERCHANT_TEST_MODE=1` is required.** It is the declaration that this database
+  is a test database. Without it the command exits 1 and — because the check runs
+  before the store is opened — does not create the database it just refused to
+  clear. `MERCHANT_DB_PATH` pointing somewhere real is then not enough on its own.
+- **Nothing calls it automatically.** It is reachable only through this flag; no
+  part of starting or serving the merchant clears anything.
+
+```bash
+MERCHANT_TEST_MODE=1 MERCHANT_DB_PATH=./merchant.db bun run start --clear
+```
+
+It prints the path it cleared and the row count per table, so a clear that landed
+on the wrong file is visible rather than implied. Two behaviours worth knowing:
+the table list is read from the schema rather than hardcoded, so a table added by
+a later migration is cleared without anyone remembering to update a list; and a
+path that does not exist yet is created empty and reported as `0 row(s)`, which is
+what starting the server would have done with it. Deletion is not secure erasure —
+see [What is not done](#what-is-not-done).
+
 ## Endpoints
 
 | Method | Path | Notes |
@@ -88,7 +111,7 @@ header; and the query `filters` set is closed.
 | `MERCHANT_TRUSTED_KEYS_PATH` | unset | JSON object of `key_id` → PEM public key |
 | `MERCHANT_QUOTE_TTL_SECONDS` | `900` | matches the fixture window |
 | `MERCHANT_CHECKOUT_DEADLINE_MS` | `5000` | beyond this a checkout answers `202`; **max 225000** — a longer settlement could not be served, so it is a startup error rather than a silent clamp |
-| `MERCHANT_TEST_MODE` | `0` | fault injection is unreachable without it |
+| `MERCHANT_TEST_MODE` | `0` | fault injection is unreachable without it, and `--clear` refuses without it |
 | `MERCHANT_FAULTS` | unset | setting this without test mode is a startup error, not a silent no-op |
 
 Bun loads `.env` from the working directory, so these are read from this
@@ -112,6 +135,12 @@ directory when the server is started through this package.
 
 - No authentication beyond the demo header — there is no account system.
 - No TLS; the demo speaks plain HTTP on loopback.
+- **`--clear` deletes rows; it does not shred them.** SQLite keeps freed pages in
+  the file and the write-ahead log holds recent pages until it is checkpointed, so
+  bytes of cleared rows can survive until they are overwritten. A cleared database
+  is empty, not erased — do not treat the flag as a way to remove data you are
+  obliged to destroy. The tool prints this caveat on every run rather than leaving
+  it to the source.
 - **This package has no route tests, deliberately** — the routes live in
   `merchant-core` and are covered there by the route-level suite, which is the
   reason `handleRequest` is a plain `Request -> Response` function. What *is*

@@ -191,6 +191,20 @@ Order:            payment_status      ⊥  fulfillment_status
 - `unknown` ≠ `pending`：`unknown` 是"不知道结果"，`pending` 是"确定还没付"。
   这个区别决定了重试是否安全。超时留下的就是 `unknown`。
 
+> **三个字段，别混**：`Order` 上与"履约/付款"沾边的字段有三个，其中**只有两个是状态**。
+>
+> | 字段 | 是什么 | 值域 |
+> |---|---|---|
+> | `fulfillment` | **方式**，不是状态 | `{ method: 'pickup' \| 'delivery', location_id }` |
+> | `payment_status` | 钱的状态轴 | `pending \| paid \| failed \| unknown` |
+> | `fulfillment_status` | 柜台的状态轴 | `pending \| ready \| completed \| cancelled` |
+>
+> 这里曾经漂移过一次：schema 把第一个状态轴写成了 `payment`，而契约、
+> 任务书与 B 自己的代码注释都写 `payment_status`，
+> 于是"实现与契约不一致"却从未被任何测试发现。
+> 现在全仓统一为 `payment_status`，且 `orderSchema` 是 `.strict()` ——
+> 再写错名字会被直接判错，不会静默通过。
+
 ## 7. D6 — 超时语义：结果未知 ≠ 失败
 
 Checkout 超过自身内部时限时，返回：
@@ -276,6 +290,17 @@ A 会认为购买没成功并重试，而钱可能已经付过。正确做法是
   - `Order` 里**没有**支付引用（它在查询端点上，是凭证形状的东西）
   - 事件采用追加记录并脱敏
 - **清空数据工具只作用于显式测试存储**，默认不自动清空。
+  - 实现：`merchant-core` 的 `clear.ts`，入口是 `bun run start --clear`。
+  - 两个门都**在代码里**，不靠调用方自觉：① 必须传 `--clear`（服务启动路径上
+    没有任何地方会清库）；② 必须 `MERCHANT_TEST_MODE=1` —— 它是"这是测试库"的
+    声明，与故障注入共用同一个开关。
+  - 拒绝发生在**开库之前**：`openMerchantDb` 会创建不存在的文件，
+    所以先开库再检查门会留下一个"被拒绝的清空"新建出来的空库。
+  - 表清单**从 `sqlite_master` 读**，不写死。写死的清单会落后于 schema，
+    而这个漂移是安静的：`idempotency_records` 少删一行，清空后重放同一个
+    key 就会拿回清空前的订单——看起来和"清空成功、只是又建了一行"一模一样。
+  - ⚠ **是删行，不是安全擦除**：SQLite 的空闲页与 WAL 可能保留旧行字节。
+    清空后的库是"空的"，不是"擦过的"。
 - 事件第一版只能称"**应用过程记录**"——未做防篡改验证前**不得宣传为不可篡改账本**。
 
 ## 12. D11 — B 不做

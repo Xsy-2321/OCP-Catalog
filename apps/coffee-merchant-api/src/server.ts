@@ -24,10 +24,13 @@
  * caller id is not an account system. Nothing here is production-ready.
  */
 import {
+  ClearRefusedError,
   MerchantConfigError,
+  clearMerchantStore,
   createMerchantContext,
   createRequestHandler,
   loadConfig,
+  type ClearResult,
   type MerchantConfig,
   type MerchantContext,
 } from '@ocp-catalog/merchant-core';
@@ -50,10 +53,15 @@ const DEFAULT_HOST = '127.0.0.1';
  * default idle timeout is 10 seconds.
  */
 
-const USAGE = `Usage: bun run start [--check]
+const USAGE = `Usage: bun run start [--check | --clear]
 
   --check   Validate the configuration and the database path, print a summary,
             then exit without opening a port.
+
+  --clear   Delete every row from the merchant's data tables, then exit.
+            Refused unless MERCHANT_TEST_MODE=1 (contract §11 D10: the clearing
+            tool acts on explicit test storage only). It never runs as part of
+            starting the server. Rows are deleted, not securely erased.
 
 Configuration comes from the environment. See .env.example in this directory.`;
 
@@ -198,6 +206,41 @@ function startupWarnings(config: MerchantConfig, host: string): string[] {
   return warnings;
 }
 
+/**
+ * Runs `--clear` and reports what it removed.
+ *
+ * The two gates — the flag and `MERCHANT_TEST_MODE` — live in
+ * `clearMerchantStore`, next to the deletes they guard, so there is one place to
+ * read rather than two that can quietly disagree. What this function adds is the
+ * operator-facing half: which database was touched, which tables were emptied,
+ * and how many rows went. A clear that succeeded against the wrong path is the
+ * outcome worth spending four lines to make visible.
+ *
+ * If the configured path does not exist it is created empty and zero rows are
+ * reported — the same thing starting the server would do with it. That is said
+ * here rather than hidden because "cleared 0 rows" against a path typo is
+ * otherwise indistinguishable from a clear that worked.
+ */
+function reportClear(config: MerchantConfig): void {
+  let result: ClearResult;
+  try {
+    result = clearMerchantStore({
+      databasePath: config.databasePath,
+      testMode: config.testMode,
+    });
+  } catch (error) {
+    if (error instanceof ClearRefusedError) fail(`${error.message}\n\n${USAGE}`);
+    fail(`cannot clear the database at ${config.databasePath}: ${messageOf(error)}`);
+  }
+
+  console.log(`cleared ${result.databasePath}`);
+  for (const entry of result.cleared) console.log(`  ${entry.table}  ${entry.rows} row(s)`);
+  console.log(`  ${result.totalRows} row(s) removed in total.`);
+  console.log(
+    '  rows are deleted, not securely erased: SQLite keeps freed pages, and the write-ahead log holds recent ones until it is checkpointed.',
+  );
+}
+
 /* ------------------------------------------------------------------- serving */
 
 function startServer(ctx: MerchantContext, hostname: string): ReturnType<typeof Bun.serve> {
@@ -253,14 +296,31 @@ function installShutdown(
 
 /* ---------------------------------------------------------------------- main */
 
+const KNOWN_ARGS = new Set(['--check', '--clear']);
+
 function main(argv: readonly string[]): void {
-  const unknown = argv.filter((arg) => arg !== '--check');
+  const unknown = argv.filter((arg) => !KNOWN_ARGS.has(arg));
   if (unknown.length > 0) fail(`unknown argument(s): ${unknown.join(', ')}\n\n${USAGE}`);
   const checkOnly = argv.includes('--check');
+  const clearOnly = argv.includes('--clear');
+  // Both are "do one thing and exit". Silently honouring one of them would make
+  // `--check --clear` a clear that was never inspected, or an inspection that
+  // silently cleared.
+  if (checkOnly && clearOnly) fail(`--check and --clear are different jobs; pass one.\n\n${USAGE}`);
 
   const config = readConfig();
+
+  // Before `openContext`, which would open (and, for a missing file, create) the
+  // database this command is about to refuse to touch.
+  if (clearOnly) {
+    reportClear(config);
+    return;
+  }
+
   // Checks a cross-file invariant rather than one of this package's own values,
-  // so it runs after `readConfig` has had its say about the deadline itself.
+  // so it runs after `readConfig` has had its say about the deadline itself —
+  // and after the clear branch, because the deadline is a property of serving a
+  // request and a clear must not be refused over a setting it never reads.
   assertDeadlineFitsSocket(config.checkoutDeadlineMs);
   const host = resolveHost(process.env);
   // Opening the context is also what proves the database path is usable, which is

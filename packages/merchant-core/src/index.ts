@@ -18,6 +18,7 @@ export * from './clock';
 export * from './faults';
 export * from './config';
 export * from './db';
+export * from './clear';
 export * from './context';
 export * from './data/catalog';
 export * from './catalog';

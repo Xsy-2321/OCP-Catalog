@@ -138,15 +138,17 @@ A 的自述是诚实的（C0/C2/C4 都明写未完成），本文件不是要指
 
 ## 6. B 侧自己欠的（我认领）
 
-| # | 问题 | 说明 |
-|---|---|---|
-| B1 | **契约 §11 承诺的清空工具不存在** | [CONTRACT.md](./CONTRACT.md) 写着"清空数据工具只作用于显式测试存储，默认不自动清空"，但全仓没有任何实现。**一条有契约条款、无实现的承诺。** |
-| B2 | **契约字段名与实现漂移** | 契约 D5 把订单的两个状态轴写作 `payment_status ⊥ fulfillment_status`；实际 schema 与 fixture 是 `payment: { status, updated_at }` + `fulfillment_status`。**`payment_status` 这个字段不存在**，值域是对的、只有名字错。 |
-| B3 | **契约没有回答 A 要的 `audience`** | A 在 `C0-REVIEW.md` 要"issuer / audience / key ID"。签名载荷有 `issuer`、可信公钥按 `key_id` 索引，但没有 `audience`。实际承担该作用的是 `merchant_id`（已在载荷内），只是契约没把这层等同写明。 |
-| B4 | Windows 外部信号关库**未验证** | 已如实写进 `apps/coffee-merchant-api/README.md` 的 "What is not done"：进程能被信号终止，但 JS handler 不跑 ⇒ 那条路径上数据库不会被关。不宣称 shutdown 可用。 |
-| B5 | `bun.lock` 提交了自己那一份 | 合并时是唯一冲突点。按 [HANDOFF-A.md](./HANDOFF-A.md) §1.2 以 A 的为准，直接丢掉 B 这份即可。 |
+| # | 问题 | 说明 | 状态 |
+|---|---|---|---|
+| B1 | **契约 §11 承诺的清空工具不存在** | [CONTRACT.md](./CONTRACT.md) 写着"清空数据工具只作用于显式测试存储，默认不自动清空"，但全仓没有任何实现。**一条有契约条款、无实现的承诺。** | **已修**（见 §11） |
+| B2 | **契约字段名与实现漂移** | 契约 D5 把订单的两个状态轴写作 `payment_status ⊥ fulfillment_status`；实际 schema 与 fixture 是 `payment: { status, updated_at }` + `fulfillment_status`。**`payment_status` 这个字段不存在**，值域是对的、只有名字错。 | **已修**（见 §11） |
+| B3 | **契约没有回答 A 要的 `audience`** | A 在 `C0-REVIEW.md` 要"issuer / audience / key ID"。签名载荷有 `issuer`、可信公钥按 `key_id` 索引，但没有 `audience`。实际承担该作用的是 `merchant_id`（已在载荷内），只是契约没把这层等同写明。 | 未动 |
+| B4 | Windows 外部信号关库**未验证** | 已如实写进 `apps/coffee-merchant-api/README.md` 的 "What is not done"：进程能被信号终止，但 JS handler 不跑 ⇒ 那条路径上数据库不会被关。不宣称 shutdown 可用。 | 未动 |
+| B5 | `bun.lock` 提交了自己那一份 | 合并时是唯一冲突点。按 [HANDOFF-A.md](./HANDOFF-A.md) §1.2 以 A 的为准，直接丢掉 B 这份即可。 | 未动 |
 
-**B1 与 B2 是我这边的缺陷，A 不需要处理。**
+**B1 与 B2 是我这边的缺陷，A 不需要处理。** 两条都只在 B 的目录里（
+`packages/shopping-contracts`、`packages/merchant-core`、`fixtures/shopping`、
+`apps/coffee-merchant-api`），**未触碰 A 的任何文件**。
 
 ---
 
@@ -261,8 +263,67 @@ mock 也当对象内字段消费 ⇒ **写 HTTP 适配器时最自然的映射�
 
 1. A `git fetch origin codex/coffee-merchant`
 2. A 加那一行 workspace + `bun install`
-3. 我修 B1（清空工具）与 B2（`payment_status` 字段名）
+3. ~~我修 B1（清空工具）与 B2（`payment_status` 字段名）~~ → **已完成，见 §11**
 4. A 放开 `mode: 'mock'` 与硬编码商家白名单，然后写 `HttpMerchantTransport`
 5. 双方跑一次真实 HTTP 的联合模拟购买
 
 第 5 项之前，第 4 项的前半段必须先做完 —— 否则接口在类型上就装不下适配器。
+
+---
+
+## 11. B1 与 B2 的修复（2026-10-08）
+
+两条都只动 B 的目录。**A 侧文件零改动。**
+
+### B2 — `payment` → `payment_status`
+
+先定性再动手：说"文档写错了"是错的。四个地方写 `payment_status`
+（`docs/team-development/README.md:126`、`AGENT_B.md:73`、
+[CONTRACT.md](./CONTRACT.md) §6 的状态图，以及 **B 自己在
+`merchant-core/src/orders.ts:7` 的注释**），只有 schema 写 `payment` ——
+`orders.ts` 因此**自相矛盾**（第 7 行说 `payment_status`，第 224 行构造 `payment`）。
+所以是**实现偏离了冻结的契约**，改的是代码，不是文档：
+改文档等于改语义，按 §14 规则 2 要提主版本号并先问 A。
+
+改到的地方：`shopping-contracts` 的 `order.ts` 与四个测试文件、
+`merchant-core` 的 `orders.ts` 与两个测试文件、
+`fixtures/shopping/generate.ts`；fixtures 按 §14 规则 4
+用 `bun fixtures/shopping/generate.ts` **重新生成**（三个 JSON 各只动了那一行键名）。
+
+顺带在 [CONTRACT.md](./CONTRACT.md) §6 补了一张三字段对照表：`Order` 上与"履约/付款"
+沾边的字段有三个，**只有两个是状态** —— `fulfillment` 是**方式**（pickup/delivery）。
+这正是当初能漂移而不被发现的原因。`orderSchema` 是 `.strict()`，
+所以名字写错会被直接判错，不会再静默通过。
+
+### B1 — 清空工具
+
+新增 `packages/merchant-core/src/clear.ts`，入口是 `apps/coffee-merchant-api`
+的 `--clear`。设计上值得记的三点：
+
+1. **两个门都在代码里，不靠调用方自觉。**
+   `clearMerchantStore({databasePath, testMode})` 自己检查测试模式，
+   并且**在开库之前**拒绝 —— 因为 `openMerchantDb` 用 `{create: true}`，
+   先开库再检查会让一次"被拒绝的清空"留下一个新建的空库。
+   实测：不带 `MERCHANT_TEST_MODE` 跑 `--clear`，退出码 1，**库文件未被创建**。
+2. **表清单从 `sqlite_master` 读，不写死。** 写死的清单会落后于 schema，
+   而这个漂移是安静的：少删一行 `idempotency_records`，清空后重放同一个 key
+   就拿回清空前的订单 —— 看起来和"清空成功、只是又建了一行"完全一样。
+   有一条测试专门建一张"这个文件从没听说过的表"来把守。
+3. **是删行，不是安全擦除。** SQLite 空闲页与 WAL 可能保留旧行字节。
+   这一点写进了源码注释、README 与每次运行的输出里，而不是只留个印象。
+
+### 验证
+
+| 检查 | 结果 |
+|---|---|
+| `bun test packages/merchant-core/src/clear.test.ts` | **10 pass / 0 fail** |
+| `bun test`（全仓） | **535 pass / 0 fail**（原 525 + 新 10） |
+| 全仓 `turbo run typecheck` | 18/18 |
+| 全仓 `turbo run build` | 11/11 |
+| `bun run site:check` | passed（36 routes） |
+| `apps/coffee-merchant-api` 单包 `tsc --noEmit` | rc=0（该包不在 workspace 里，turbo 看不见它） |
+| 真机 `--clear` 全流程 | 拒绝时不建库 → `--check` 建库 → 塞 2 行 → `MERCHANT_TEST_MODE=1 --clear` 报每表行数 → 复查全 0、`schema_meta` 保留 |
+
+> 本报告 §2 记的 **560** 是当时那次合并实测的数字，未随本轮改动更新；
+> 现在重跑全仓会多出 B1 的这 10 项。不改那个数字，是因为它记的是一次
+> 真实测量，改掉就等于伪造当时的观测。
