@@ -4,8 +4,8 @@
     "advisory": "GHSA-vfj7-8cjw-p6xm",
     "severity": "high",
     "versions": ["3.0.3"],
-    "expires": "2026-11-07",
-    "reason": "Tailwind/micromatch build-time glob patterns come from repository configuration. The site serves static build output and accepts no remote build patterns. No patched release exists; review or remove when upstream fixes it.",
+    "expires": "2027-05-07",
+    "reason": "braces@3.0.3 is still the newest published release as of 2026-10-09, so there is no patched version to upgrade to; the vulnerability cannot be closed by upgrading. It is reached only through build-time glob expansion (micromatch <- Tailwind), where the patterns come from repository configuration. The site serves static build output and accepts no remote build patterns.",
     "source": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
   },
   {
@@ -13,8 +13,8 @@
     "advisory": "GHSA-rj75-hqrm-r3gf",
     "severity": "moderate",
     "versions": ["6.0.10", "6.1.4"],
-    "expires": "2026-11-07",
-    "reason": "Tailwind 3 and typography process repository-owned CSS only. Fix 7.1.6 crosses the parents' major constraint; keep current toolchain until a separately validated upgrade. No online CSS compilation endpoint exists.",
+    "expires": "2027-05-07",
+    "reason": "The patched release 7.1.6 crosses the parents' major constraint (Tailwind 3 and @tailwindcss/typography pin ^6), so adopting it needs either a transitive override or a Tailwind major upgrade, each requiring separate validation. Tailwind 3 and typography process repository-owned CSS only, offline; no online CSS compilation endpoint exists. Review on the next Tailwind upgrade.",
     "source": "https://github.com/advisories/GHSA-rj75-hqrm-r3gf"
   }
 ]
