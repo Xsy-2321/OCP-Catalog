@@ -1,0 +1,10 @@
+{
+  "ocp_version": "1.0",
+  "kind": "CatalogHealth",
+  "catalog_id": "catalog_coffee_demo",
+  "status": "healthy",
+  "ready": true,
+  "checked_at": "2026-10-07T10:05:00.000Z",
+  "details": {},
+  "dependencies": []
+}

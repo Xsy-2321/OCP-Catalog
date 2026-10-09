@@ -1,0 +1,10 @@
+{
+  "ocp_version": "1.0",
+  "kind": "WellKnownCatalogDiscovery",
+  "catalog_id": "catalog_coffee_demo",
+  "catalog_name": "演示咖啡（本地模拟）",
+  "manifest_url": "http://127.0.0.1:8787/ocp/manifest",
+  "health_url": "http://127.0.0.1:8787/ocp/health",
+  "query_url": "http://127.0.0.1:8787/ocp/query",
+  "resolve_url": "http://127.0.0.1:8787/ocp/resolve"
+}

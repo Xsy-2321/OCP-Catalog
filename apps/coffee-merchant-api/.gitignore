@@ -1,0 +1,12 @@
+# Local configuration, generated key material and the demo database.
+#
+# `.env` and `.env.local` are already covered by the root .gitignore; they are
+# repeated so this list reads on its own. The rest are artifacts this package
+# produces that the root patterns do not name: the trusted-key file, and the
+# SQLite database together with the -wal/-shm sidecars it writes beside it.
+.env
+.env.local
+trusted-keys.json
+*.db
+*.db-wal
+*.db-shm

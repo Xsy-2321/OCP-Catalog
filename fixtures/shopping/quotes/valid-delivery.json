@@ -1,0 +1,31 @@
+{
+  "quote_id": "quote_fixture_latte_delivery",
+  "merchant_id": "merchant_coffee_demo",
+  "catalog_id": "catalog_coffee_demo",
+  "currency": "CNY",
+  "items": [
+    {
+      "entry_id": "entry_latte",
+      "title": "拿铁",
+      "quantity": 1,
+      "unit_minor": 2500,
+      "line_total_minor": 2500
+    }
+  ],
+  "fees": [
+    {
+      "code": "delivery",
+      "label": "配送费",
+      "amount_minor": 500
+    }
+  ],
+  "subtotal_minor": 2500,
+  "total_minor": 3000,
+  "fulfillment": {
+    "method": "delivery",
+    "location_id": "store_zjg"
+  },
+  "created_at": "2026-10-07T10:00:00.000Z",
+  "expires_at": "2026-10-07T10:15:00.000Z",
+  "terms_hash": "42bdd36ee83914fb288d454b0ef2dc15c1d02bed6f9cce9ca1c7eb2e98472fa4"
+}

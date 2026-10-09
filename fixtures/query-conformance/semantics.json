@@ -1,0 +1,391 @@
+{
+  "description": "All bodies are protocol-schema valid. HTTP status checks the reference-node capability, and sdk_error records the current SDK validation result against the node manifest.",
+  "node_capability": {
+    "query_pack": "ocp.query.keyword.v1",
+    "query_modes": [
+      "keyword"
+    ],
+    "filter_fields": []
+  },
+  "node_default_query_mode": "keyword",
+  "sdk_default_note": "The SDK infers filter for an omitted mode with an empty query. The examples retain their historical list-all keyword default; SDK callers should select query_mode keyword explicitly for this request.",
+  "cases": [
+    {
+      "name": "implicit keyword search",
+      "body": {
+        "query": "headphones"
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 20,
+      "entry_ids": [
+        "entry_example_inmemory_sku-001"
+      ]
+    },
+    {
+      "name": "declared keyword pack",
+      "body": {
+        "query": "headphones",
+        "query_pack": "ocp.query.keyword.v1"
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 20,
+      "entry_ids": [
+        "entry_example_inmemory_sku-001"
+      ]
+    },
+    {
+      "name": "explicit keyword mode",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword"
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 20,
+      "entry_ids": [
+        "entry_example_inmemory_sku-001"
+      ]
+    },
+    {
+      "name": "declared pack and mode",
+      "body": {
+        "query": "headphones",
+        "query_pack": "ocp.query.keyword.v1",
+        "query_mode": "keyword"
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 20,
+      "entry_ids": [
+        "entry_example_inmemory_sku-001"
+      ]
+    },
+    {
+      "name": "empty filters are not a filtering request",
+      "body": {
+        "query": "headphones",
+        "filters": {}
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 20,
+      "entry_ids": [
+        "entry_example_inmemory_sku-001"
+      ]
+    },
+    {
+      "name": "explicit keyword lists all with empty query",
+      "body": {
+        "query": "",
+        "query_mode": "keyword"
+      },
+      "status": 200,
+      "result_count": 3,
+      "page_limit": 20
+    },
+    {
+      "name": "explicit keyword lists all with whitespace query",
+      "body": {
+        "query": "  ",
+        "query_mode": "keyword",
+        "filters": {}
+      },
+      "status": 200,
+      "result_count": 3,
+      "page_limit": 20
+    },
+    {
+      "name": "node default lists all without a query",
+      "body": {},
+      "status": 200,
+      "result_count": 3,
+      "page_limit": 20,
+      "sdk_error": "invalid_query_mode"
+    },
+    {
+      "name": "node default lists all with empty filters",
+      "body": {
+        "filters": {}
+      },
+      "status": 200,
+      "result_count": 3,
+      "page_limit": 20,
+      "sdk_error": "invalid_query_mode"
+    },
+    {
+      "name": "unsupported pack",
+      "body": {
+        "query": "headphones",
+        "query_pack": "unsupported.pack"
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_pack",
+      "error_message": "unsupported query_pack: only ocp.query.keyword.v1 is supported"
+    },
+    {
+      "name": "another pack is not implied by protocol validity",
+      "body": {
+        "query": "headphones",
+        "query_pack": "ocp.query.filter.v1"
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_pack",
+      "error_message": "unsupported query_pack: only ocp.query.keyword.v1 is supported"
+    },
+    {
+      "name": "pack identity is exact",
+      "body": {
+        "query": "headphones",
+        "query_pack": "OCP.QUERY.KEYWORD.V1"
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_pack",
+      "error_message": "unsupported query_pack: only ocp.query.keyword.v1 is supported"
+    },
+    {
+      "name": "unsupported filter mode",
+      "body": {
+        "query": "headphones",
+        "query_pack": "ocp.query.keyword.v1",
+        "query_mode": "filter"
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_mode",
+      "error_message": "unsupported query_mode: only keyword is supported"
+    },
+    {
+      "name": "unsupported semantic mode",
+      "body": {
+        "query": "headphones",
+        "query_pack": "ocp.query.keyword.v1",
+        "query_mode": "semantic"
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_mode",
+      "error_message": "unsupported query_mode: only keyword is supported"
+    },
+    {
+      "name": "unsupported hybrid mode",
+      "body": {
+        "query": "headphones",
+        "query_pack": "ocp.query.keyword.v1",
+        "query_mode": "hybrid"
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_mode",
+      "error_message": "unsupported query_mode: only keyword is supported"
+    },
+    {
+      "name": "unsupported filter category",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "category": "electronics"
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter brand",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "brand": "Aurora"
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter currency",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "currency": "USD"
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter availability_status",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "availability_status": "in_stock"
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter provider_id",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "provider_id": "example_inmemory"
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter sku",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "sku": "sku-001"
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter min_amount",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "min_amount": 0
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter max_amount",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "max_amount": 0
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter in_stock_only",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "in_stock_only": true
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported filter has_image",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "has_image": true
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "explicit false filter in_stock_only still requests a field",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "in_stock_only": false
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "explicit false filter has_image still requests a field",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "has_image": false
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "filter-only request with inferred mode",
+      "body": {
+        "filters": {
+          "max_amount": 0
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_mode",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "keyword and filters with inferred hybrid mode",
+      "body": {
+        "query": "headphones",
+        "filters": {
+          "max_amount": 0
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_mode",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "multiple filters cannot silently pass",
+      "body": {
+        "query": "headphones",
+        "query_mode": "keyword",
+        "filters": {
+          "category": "electronics",
+          "min_amount": 0,
+          "max_amount": 200.5,
+          "in_stock_only": false,
+          "has_image": false
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_filter_field",
+      "error_message": "unsupported filters: this keyword node does not support filter fields"
+    },
+    {
+      "name": "unsupported pack takes precedence over unsupported mode and filters",
+      "body": {
+        "query_pack": "unsupported.pack",
+        "query_mode": "semantic",
+        "query": "headphones",
+        "filters": {
+          "max_amount": 0
+        }
+      },
+      "status": 400,
+      "sdk_error": "invalid_query_pack",
+      "error_message": "unsupported query_pack: only ocp.query.keyword.v1 is supported"
+    }
+  ]
+}

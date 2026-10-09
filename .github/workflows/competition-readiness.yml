@@ -1,0 +1,63 @@
+name: Competition readiness
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      CODEX_HOME: ${{ runner.temp }}/ocp-test-codex
+      CLAUDE_CONFIG_DIR: ${{ runner.temp }}/ocp-test-claude
+      DEEPSEEK_API_KEY: ''
+      SHOPPING_LLM_API_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: examples/go/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bun run runtime:check
+      - run: bun install --frozen-lockfile
+      - run: bun run engineering:inputs
+      - run: bun run build
+      - run: bun run typecheck
+      - run: bun run shopping:check
+      - run: bun run lint
+      - run: bun run test:all
+      - run: bun run site:check
+      - run: bun run skill:check
+      - run: python conformance_test.py
+        working-directory: examples/python
+      - run: go test ./...
+        working-directory: examples/go
+      - run: bun run security:check
+      - run: bunx --no-install playwright install --with-deps chromium
+      - run: bun run site:browser
+      - run: bun run shopping:browser
+      - run: bun run shopping:basket:browser
+      - run: bun run shopping:expiry:browser
+      - run: bun run shopping:merchant:browser
+      # These checks use synthetic fixtures and isolated local services/data.
+      # Generated screenshots and reports remain on the runner; no artifact upload.
+      - run: bun run shopping:portal:browser
+      - run: bun run shopping:merchant:presentation:browser
+      - run: bun run shopping:presets:browser

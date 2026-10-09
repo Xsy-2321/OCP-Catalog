@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { hashSkillDirectory, readInstallMarker as readMarker, removeManagedDirectory, replaceManagedDirectory } from '../../../shared/skill-installer-core.mjs';
 
 export const OCP_SKILL_NAME = 'ocp-catalog';
 export const OCP_SKILL_MARKER = '.ocp-skill-install.json';
@@ -86,21 +86,22 @@ export async function installOcpSkill(options: SkillInstallOptions = {}): Promis
     };
   }
 
-  const contentHash = await hashDirectory(sourceDir);
+  const contentHash = await hashSkillDirectory(sourceDir, OCP_SKILL_MARKER);
   const packageVersion = await readPackageVersion();
   const installedDirs: string[] = [];
 
   for (const targetDir of targetDirs) {
     const installDir = resolveInstallDir(targetDir);
-    await assertCanReplaceInstallDir(installDir, force);
-    await replaceDirectory(sourceDir, installDir);
-    await writeInstallMarker(installDir, {
-      package_name: OCP_CLI_PACKAGE,
-      package_version: packageVersion,
-      skill_name: OCP_SKILL_NAME,
-      content_hash: contentHash,
-      installed_at: new Date().toISOString(),
-      source: sourceDir,
+    await replaceManagedDirectory(sourceDir, installDir, {
+      ...ownershipPolicy(force),
+      marker: {
+        package_name: OCP_CLI_PACKAGE,
+        package_version: packageVersion,
+        skill_name: OCP_SKILL_NAME,
+        content_hash: contentHash,
+        installed_at: new Date().toISOString(),
+        source: sourceDir,
+      },
     });
     installedDirs.push(installDir);
   }
@@ -132,10 +133,7 @@ export async function uninstallOcpSkill(options: Omit<SkillInstallOptions, 'sour
 
   for (const targetDir of targetDirs) {
     const installDir = resolveInstallDir(targetDir);
-    if (!existsSync(installDir)) continue;
-    await assertManagedInstallDir(installDir, force, 'uninstall');
-    await rm(installDir, { recursive: true, force: true });
-    removedDirs.push(installDir);
+    if (await removeManagedDirectory(installDir, ownershipPolicy(force))) removedDirs.push(installDir);
   }
 
   return {
@@ -262,108 +260,19 @@ async function assertSkillSource(sourceDir: string): Promise<void> {
   }
 }
 
-async function assertCanReplaceInstallDir(installDir: string, force: boolean): Promise<void> {
-  if (!existsSync(installDir)) return;
-  await assertManagedInstallDir(installDir, force, 'overwrite');
-}
-
-async function assertManagedInstallDir(installDir: string, force: boolean, action: 'overwrite' | 'uninstall'): Promise<void> {
-  if (force) return;
-
-  const marker = await readInstallMarker(installDir);
-  if (!marker || marker.package_name !== OCP_CLI_PACKAGE || marker.skill_name !== OCP_SKILL_NAME) {
-    throw new Error(`Refusing to ${action} unmanaged skill at ${installDir}. Re-run with --force if this is intentional.`);
-  }
-}
-
-async function replaceDirectory(sourceDir: string, installDir: string): Promise<void> {
-  const parentDir = path.dirname(installDir);
-  await mkdir(parentDir, { recursive: true });
-
-  const tempDir = await mkdtemp(path.join(parentDir, `.${OCP_SKILL_NAME}-new-`));
-  const backupDir = `${installDir}.backup-${Date.now()}`;
-  let hasBackup = false;
-
-  try {
-    await copyDirectory(sourceDir, tempDir);
-    if (existsSync(installDir)) {
-      await rename(installDir, backupDir);
-      hasBackup = true;
-    }
-    await rename(tempDir, installDir);
-    if (hasBackup) await rm(backupDir, { recursive: true, force: true });
-  } catch (error) {
-    await rm(tempDir, { recursive: true, force: true });
-    if (hasBackup && !existsSync(installDir)) {
-      await rename(backupDir, installDir);
-    }
-    throw error;
-  }
-}
-
-async function copyDirectory(source: string, target: string): Promise<void> {
-  await mkdir(target, { recursive: true });
-  const entries = await readdir(source);
-
-  for (const entry of entries) {
-    if (entry === OCP_SKILL_MARKER) continue;
-
-    const sourcePath = path.join(source, entry);
-    const targetPath = path.join(target, entry);
-    const entryStat = await stat(sourcePath);
-
-    if (entryStat.isDirectory()) {
-      await copyDirectory(sourcePath, targetPath);
-      continue;
-    }
-
-    if (entryStat.isFile()) {
-      await copyFile(sourcePath, targetPath);
-    }
-  }
-}
-
-async function writeInstallMarker(installDir: string, marker: SkillInstallMarker): Promise<void> {
-  await writeFile(path.join(installDir, OCP_SKILL_MARKER), `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
-}
-
 async function readInstallMarker(installDir: string): Promise<SkillInstallMarker | undefined> {
-  try {
-    return JSON.parse(await readFile(path.join(installDir, OCP_SKILL_MARKER), 'utf8')) as SkillInstallMarker;
-  } catch {
-    return undefined;
-  }
+  return readMarker<SkillInstallMarker>(installDir, OCP_SKILL_MARKER);
 }
 
-async function hashDirectory(sourceDir: string): Promise<string> {
-  const hash = createHash('sha256');
-
-  const walk = async (currentDir: string): Promise<void> => {
-    const entries = (await readdir(currentDir)).sort();
-
-    for (const entry of entries) {
-      if (entry === OCP_SKILL_MARKER) continue;
-
-      const fullPath = path.join(currentDir, entry);
-      const relativePath = path.relative(sourceDir, fullPath).replaceAll('\\', '/');
-      const entryStat = await stat(fullPath);
-
-      if (entryStat.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-
-      if (entryStat.isFile()) {
-        hash.update(relativePath);
-        hash.update('\0');
-        hash.update(await readFile(fullPath));
-        hash.update('\0');
-      }
-    }
+function ownershipPolicy(force: boolean) {
+  return {
+    markerName: OCP_SKILL_MARKER,
+    force,
+    isManaged: (value: unknown) => {
+      const marker = value as Partial<SkillInstallMarker> | undefined;
+      return marker?.package_name === OCP_CLI_PACKAGE && marker.skill_name === OCP_SKILL_NAME;
+    },
   };
-
-  await walk(sourceDir);
-  return hash.digest('hex');
 }
 
 async function readPackageVersion(): Promise<string> {

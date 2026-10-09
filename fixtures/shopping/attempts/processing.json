@@ -1,0 +1,9 @@
+{
+  "purchase_attempt_id": "att_fixture_0001",
+  "merchant_id": "merchant_coffee_demo",
+  "quote_id": "quote_fixture_latte_pickup",
+  "catalog_id": "catalog_coffee_demo",
+  "status": "processing",
+  "created_at": "2026-10-07T10:05:00.000Z",
+  "updated_at": "2026-10-07T10:05:00.000Z"
+}

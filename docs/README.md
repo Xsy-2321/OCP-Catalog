@@ -6,6 +6,16 @@ agents) live with the applications in the
 [ocp-catalog-instances](https://github.com/Open-Commerce-Protocol/ocp-catalog-instances)
 repo.
 
+## Local shopping application
+
+This repository also contains the local application **一杯之间**. Start with
+[setup and recovery](shopping-agent/README.md), [the competition demonstration](shopping-agent/COMPETITION.md),
+and [implementation status](shopping-agent/STATUS.md).
+
+Implementation guarantees, supported scope, and recovery limits are summarized
+in [implementation status](shopping-agent/STATUS.md). Machine-specific review
+notes, runtime data, logs, and screenshots stay local and are not release content.
+
 ## Source Of Truth
 
 Use this order when protocol descriptions conflict:

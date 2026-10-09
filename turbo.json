@@ -1,5 +1,13 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [
+    "shared/skill-installer-core.mjs",
+    "shared/skill-installer-core.d.mts",
+    "scripts/build-protocol-package.ts",
+    "scripts/build-ocp-cli.ts",
+    "scripts/sync-skill-copies.ts",
+    "skills/ocp-catalog/**"
+  ],
   "tasks": {
     "dev": {
       "cache": false,
@@ -12,6 +20,18 @@
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**", "skill/**"]
+    },
+    "@ocp-catalog/shopping-agent-web#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "public/contracts.js"]
+    },
+    "@ocp-catalog/agent-runtime#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@ocp-catalog/shopping-agent-api#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
     },
     "typecheck": {
       "dependsOn": ["^build"]

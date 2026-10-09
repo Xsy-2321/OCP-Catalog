@@ -15,7 +15,7 @@ import {
  * per catalog on every page load.
  */
 export function useCatalogScale(): CatalogScale {
-  const { catalogs, isLoading } = useDirectory({ pollMs: 60_000, searchLimit: 50 });
+  const { catalogs, isLoading, registries } = useDirectory({ pollMs: 60_000, searchLimit: 50 });
 
   // Still waiting on the very first directory response — nothing to show yet.
   if (isLoading && catalogs.length === 0) {
@@ -25,6 +25,10 @@ export function useCatalogScale(): CatalogScale {
       storedCatalogCount: 0,
       streamedCatalogCount: 0,
     };
+  }
+
+  if (registries.some((registry) => registry.status === 'unreachable')) {
+    return { status: 'unavailable', storedTotal: 0, storedCatalogCount: 0, streamedCatalogCount: 0 };
   }
 
   // Each discovered catalog becomes a settled probe: it has a data_profile count

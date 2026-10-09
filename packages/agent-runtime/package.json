@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@ocp-catalog/ocp-client": "workspace:*",
-    "@ocp-catalog/ocp-schema": "workspace:*"
+    "@ocp-catalog/ocp-schema": "workspace:*",
+    "@ocp-catalog/shopping-contracts": "workspace:*"
   }
 }

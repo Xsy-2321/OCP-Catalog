@@ -4,7 +4,7 @@ import { Menu, X } from 'lucide-react';
 import { docsUiText, useDocsLocale } from '../content/i18n';
 import { stripLocalePrefix } from '../content/routing';
 import { OcpLogo } from '../components/site/OcpLogo';
-import { useTheme } from '../theme/ThemeContext';
+import { useTheme } from '../theme/useTheme';
 
 const navItems = [
   { label: { en: 'News', zh: '新闻' }, href: '/updates' },

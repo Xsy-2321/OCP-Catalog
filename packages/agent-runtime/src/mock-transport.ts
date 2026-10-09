@@ -1,10 +1,12 @@
 import { createHash, type KeyObject } from 'node:crypto';
+import { computeTermsHash, quoteTermsSchema, TERMS_DOMAIN } from '@ocp-catalog/shopping-contracts';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { verifyLocalMockProof } from './authorization';
 import { FlowError } from './errors';
 import { atomicJsonWrite, SerialQueue } from './store';
-import type { Candidate, CheckoutInput, Intent, MerchantAttempt, MerchantPort, Order, Quote } from './types';
+import { mergeSelections } from './validation';
+import type { BasketSelection, Candidate, CheckoutInput, Intent, MerchantAttempt, MerchantPort, Order, Quote, ReadOperationOptions } from './types';
 
 export const MOCK_ORIGIN = 'http://127.0.0.1:4401';
 export type MockFault = 'none' | 'response_lost' | 'payment_failed' | 'processing' | 'out_of_stock' | 'requote_required';
@@ -13,11 +15,11 @@ export interface MockOptions { fault?: MockFault; now?: () => number; quoteTtlMs
 // A-owned development fixtures. They are NOT B's facts or the shared fixtures/shopping.
 export const MOCK_CANDIDATES: readonly Candidate[] = [
   { entry_id: 'mock_latte', catalog_id: 'mock_coffee_catalog', merchant_id: 'coffee-demo', title: '经典拿铁',
-    description: '双份浓缩 · 绵密奶泡 · 到店自取', search_price_minor: 2600, currency: 'CNY', in_stock: true },
+    description: '双份浓缩 · 绵密奶泡 · 到店自取', search_price_minor: 2600, currency: 'CNY', in_stock: true, fulfillment_methods: ['pickup', 'delivery'] },
   { entry_id: 'mock_special_latte', catalog_id: 'mock_coffee_catalog', merchant_id: 'coffee-demo', title: '特调拿铁',
-    description: '焦糖风味 · 最终报价另含打包费', search_price_minor: 2900, currency: 'CNY', in_stock: true },
+    description: '焦糖风味 · 最终报价另含打包费', search_price_minor: 2900, currency: 'CNY', in_stock: true, fulfillment_methods: ['pickup'] },
   { entry_id: 'mock_espresso', catalog_id: 'mock_coffee_catalog', merchant_id: 'coffee-demo', title: '浓缩咖啡',
-    description: '双份浓缩 · 醇厚坚果香', search_price_minor: 1800, currency: 'CNY', in_stock: true },
+    description: '双份浓缩 · 醇厚坚果香', search_price_minor: 1800, currency: 'CNY', in_stock: true, fulfillment_methods: ['pickup', 'delivery'] },
   { entry_id: 'mock_sold_out', catalog_id: 'mock_coffee_catalog', merchant_id: 'coffee-demo', title: '燕麦拿铁（售罄）',
     description: '缺货测试样例', search_price_minor: 2600, currency: 'CNY', in_stock: false },
 ];
@@ -40,33 +42,58 @@ export class MockMerchantTransport implements MerchantPort {
     this.now = options.now ?? Date.now;
     this.file = join(directory, 'mock-transport.json');
   }
-  async search(intent: Intent): Promise<Candidate[]> {
+  async search(intent: Intent, options: ReadOperationOptions = {}): Promise<Candidate[]> {
+    options.signal?.throwIfAborted();
     const query = intent.query.toLowerCase();
     const keyword = /latte|拿铁/.test(query) ? '拿铁' : /espresso|浓缩/.test(query) ? '浓缩' : '';
     return MOCK_CANDIDATES.filter(candidate => (!keyword || candidate.title.includes(keyword))
       && candidate.currency === intent.currency && candidate.in_stock
+      && (intent.fulfillment !== 'delivery' || candidate.fulfillment_methods?.includes('delivery'))
       && candidate.search_price_minor * intent.quantity <= intent.max_total_minor).map(value => structuredClone(value));
   }
-  async resolve(candidate: Candidate) {
+  async resolve(candidate: Candidate, _intent?: Intent, options: ReadOperationOptions = {}) {
+    options.signal?.throwIfAborted();
     this.product(candidate.entry_id);
     return { checkout_url: `${MOCK_ORIGIN}/commerce/v1/checkouts`, expires_at: new Date(this.now() + 300_000).toISOString() };
   }
-  async quote(userId: string, candidate: Candidate, intent: Intent): Promise<Quote> {
+  async quote(userId: string, candidate: Candidate, intent: Intent, options: ReadOperationOptions = {}): Promise<Quote> {
+    return this.quoteBasket(userId, [{ candidate, quantity: intent.quantity }], intent, options);
+  }
+  async quoteBasket(userId: string, selections: BasketSelection[], intent: Intent, options: ReadOperationOptions = {}): Promise<Quote> {
+    options.signal?.throwIfAborted();
     return this.queue.run('data', async () => {
-      const product = this.product(candidate.entry_id);
-      if (!product.in_stock) throw new FlowError('out_of_stock', '商品已售罄。');
-      const terms = {
-        user_id: userId, merchant_id: product.merchant_id, entry_id: product.entry_id, title: product.title,
-        quantity: intent.quantity, fulfillment: intent.fulfillment, currency: product.currency,
-        unit_price_minor: product.search_price_minor, fees: [{ label: '打包服务费', amount_minor: 200 }],
-        total_minor: product.search_price_minor * intent.quantity + 200,
-      };
+      options.signal?.throwIfAborted();
+      const merged = mergeSelections(selections);
+      if (!merged.length || merged.reduce((sum, selection) => sum + selection.quantity, 0) !== intent.quantity) throw new FlowError('invalid_request', '整单杯数无效。');
+      const items = merged.map(selection => {
+        const product = this.product(selection.candidate.entry_id);
+        if (!product.in_stock) throw new FlowError('out_of_stock', '商品已售罄。');
+        if (!Number.isSafeInteger(selection.quantity) || selection.quantity < 1
+          || !product.fulfillment_methods?.includes(intent.fulfillment)) throw new FlowError('invalid_request', '商品不支持所选履约方式或杯数。');
+        return { entry_id: product.entry_id, title: product.title, quantity: selection.quantity,
+          unit_price_minor: product.search_price_minor, line_total_minor: product.search_price_minor * selection.quantity };
+      });
+      const fees = [{ label: '打包服务费', amount_minor: 200 }, ...(intent.fulfillment === 'delivery' ? [{ label: '配送费', amount_minor: 500 }] : [])];
+      const total = items.reduce((sum, item) => sum + item.line_total_minor, 0) + fees.reduce((sum, fee) => sum + fee.amount_minor, 0);
+      const quoteId = `mock_quote_${crypto.randomUUID()}`;
+      const wireTerms = quoteTermsSchema.parse({ v: TERMS_DOMAIN, merchant_id: intent.merchant_id, quote_id: quoteId,
+        currency: intent.currency, total_minor: total,
+        items: items.map(item => ({ entry_id: item.entry_id, quantity: item.quantity, unit_minor: item.unit_price_minor })),
+        fees: fees.map((fee, index) => ({ code: index === 0 ? 'packing' : 'delivery', amount_minor: fee.amount_minor })),
+        fulfillment: { method: intent.fulfillment, ...(intent.delivery ? { delivery: intent.delivery } : {}) } });
       const quote: Quote = {
-        ...terms, quote_id: `mock_quote_${crypto.randomUUID()}`,
-        terms_hash: createHash('sha256').update(JSON.stringify(terms)).digest('hex'),
+        user_id: userId, merchant_id: intent.merchant_id, catalog_id: merged[0]!.candidate.catalog_id,
+        entry_id: items[0]!.entry_id, title: items[0]!.title, unit_price_minor: items[0]!.unit_price_minor,
+        quantity: intent.quantity, currency: intent.currency, fulfillment: intent.fulfillment,
+        ...(intent.delivery ? { delivery: structuredClone(intent.delivery) } : {}), items,
+        fees: fees.map((fee, index) => ({ ...fee, ...(intent.items.length > 1 || intent.fulfillment === 'delivery' ? { code: index === 0 ? 'packing' : 'delivery' } : {}) })), total_minor: total,
+        quote_id: quoteId, terms_hash: computeTermsHash(wireTerms), wire_terms: wireTerms,
         expires_at: new Date(this.now() + (this.options.quoteTtlMs ?? 120_000)).toISOString(),
       };
-      const data = await this.read(); data.quotes[quote.quote_id] = quote; await this.write(data);
+      const data = await this.read();
+      options.signal?.throwIfAborted();
+      data.quotes[quote.quote_id] = quote; await this.write(data);
+      options.signal?.throwIfAborted();
       return structuredClone(quote);
     });
   }
@@ -107,6 +134,10 @@ export class MockMerchantTransport implements MerchantPort {
           order_id: `mock_order_${crypto.randomUUID()}`, purchase_attempt_id: input.purchase_attempt_id,
           title: quote.title, quantity: quote.quantity, currency: quote.currency, total_minor: quote.total_minor,
           payment_status: 'paid', fulfillment_status: 'preparing', updated_at: new Date(this.now()).toISOString(),
+          items: quote.items && structuredClone(quote.items), fulfillment: quote.fulfillment,
+          ...(quote.delivery ? { delivery: structuredClone(quote.delivery) } : {}),
+          merchant_id: quote.merchant_id, catalog_id: quote.catalog_id, quote_id: quote.quote_id,
+          terms_hash: quote.terms_hash, entry_id: quote.entry_id, wire_terms: quote.wire_terms && structuredClone(quote.wire_terms),
         };
         data.payment_count += 1;
         data.orders[order.order_id] = { user_id: input.user_id, order };
