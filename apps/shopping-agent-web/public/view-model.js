@@ -8,6 +8,119 @@ import { isPendingPurchase, canRequestQuote } from './contracts.js';
 /** @typedef {{ mode: 'manual' | 'agent', mixed: boolean, query: string, message: string, budget: string, quantity: number, items: DraftItem[], fulfillment: 'pickup' | 'delivery', delivery: Delivery, changed: boolean }} Draft */
 /** @typedef {{ busy: boolean, backgroundChecking: boolean, transportUncertain: boolean, pendingCheckFailed: boolean, connectionFailed: boolean, pendingSessions: SessionView[], refreshQueued: boolean, basketChanged: boolean, basketChoices: Map<number, string>, transient: { text: string, kind: string } }} UiStatus */
 /** @typedef {{ draft: Draft, serverSession: SessionView | null, configuration: ConfigView | null, plannerResult: AgentRunView | null, uiStatus: UiStatus }} PageState */
+/** @typedef {{ sessionId: string, attemptId: string, orderId: string }} PaidPurchase */
+/** @typedef {{ version: 1, createdAt: number, sessionId: string | null, revision: number | null, step: number, draft: Draft, paidPurchase: PaidPurchase | null }} ConfigurationDraft */
+/** @typedef {Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>} DraftStorage */
+
+export const configurationDraftKey = 'ocp-shopping-configuration-draft';
+export const configurationDraftLifetime = 30 * 60 * 1000;
+
+/** Keep only the identity of a completed simulated purchase, never its private order details.
+ * @param {unknown} value @returns {PaidPurchase | null}
+ */
+function safePaidPurchase(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const purchase = /** @type {Record<string, unknown>} */ (value);
+  if (![purchase.sessionId, purchase.attemptId, purchase.orderId].every(id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,256}$/.test(id))) return null;
+  return { sessionId: /** @type {string} */ (purchase.sessionId), attemptId: /** @type {string} */ (purchase.attemptId), orderId: /** @type {string} */ (purchase.orderId) };
+}
+
+/** @param {SessionView | null} session @returns {PaidPurchase | null} */
+export function paidPurchaseContext(session) {
+  if (session?.phase !== 'confirmed' || session.attempt?.status !== 'confirmed' || session.order?.payment_status !== 'paid'
+    || session.error || session.order.purchase_attempt_id !== session.attempt.purchase_attempt_id) return null;
+  return safePaidPurchase({ sessionId: session.id, attemptId: session.attempt.purchase_attempt_id, orderId: session.order.order_id });
+}
+
+/** A changed projection is acceptable only for an explicit new request tied to the same completed purchase.
+ * Unpaid work still requires its exact session and revision; pending discovery always wins.
+ * @param {ConfigurationDraft} record @param {PageState} state @param {boolean} factsRestored @param {boolean} [pendingObserved]
+ */
+export function canRestoreConfigurationDraft(record, state, factsRestored, pendingObserved = false) {
+  const { serverSession: session, uiStatus: ui } = state;
+  if (!factsRestored || pendingObserved || ui.pendingCheckFailed || ui.transportUncertain || ui.pendingSessions.length
+    || (session && isPendingPurchase(session))) return false;
+  if (record.sessionId === (session?.id ?? null) && record.revision === (session?.revision ?? null)) return true;
+  const paid = paidPurchaseContext(session), previous = record.paidPurchase;
+  return Boolean(record.step === 0 && record.draft.changed && paid && previous
+    && (record.sessionId === null || record.sessionId === paid.sessionId)
+    && previous.sessionId === paid.sessionId && previous.attemptId === paid.attemptId && previous.orderId === paid.orderId);
+}
+
+/** Only shopping form fields cross the configuration detour; never copy arbitrary page or API settings.
+ * @param {unknown} value
+ * @returns {Draft | null}
+ */
+function safeDraft(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const draft = /** @type {Record<string, unknown>} */ (value);
+  /** @param {unknown} text @param {number} length */
+  const boundedText = (text, length) => typeof text === 'string' && text.length <= length;
+  /** @param {unknown} quantity */
+  const boundedQuantity = quantity => typeof quantity === 'number' && Number.isFinite(quantity) && quantity >= 0 && quantity <= 1000;
+  if (!['manual', 'agent'].includes(String(draft.mode)) || typeof draft.mixed !== 'boolean' || typeof draft.changed !== 'boolean'
+    || !boundedText(draft.query, 500) || !boundedText(draft.message, 1000) || !boundedText(draft.budget, 64)
+    || !boundedQuantity(draft.quantity) || !['pickup', 'delivery'].includes(String(draft.fulfillment))
+    || !Array.isArray(draft.items) || draft.items.length > 10 || !draft.delivery || typeof draft.delivery !== 'object' || Array.isArray(draft.delivery)) return null;
+  const delivery = /** @type {Record<string, unknown>} */ (draft.delivery);
+  if (!boundedText(delivery.recipient, 60) || !boundedText(delivery.phone, 20) || !boundedText(delivery.address, 300)) return null;
+  /** @type {DraftItem[]} */
+  const items = [];
+  for (const value of draft.items) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const item = /** @type {Record<string, unknown>} */ (value);
+    if (!boundedText(item.query, 500) || !boundedQuantity(item.quantity)) return null;
+    items.push({ query: /** @type {string} */ (item.query), quantity: /** @type {number} */ (item.quantity) });
+  }
+  return { mode: /** @type {Draft['mode']} */ (draft.mode), mixed: draft.mixed, query: /** @type {string} */ (draft.query),
+    message: /** @type {string} */ (draft.message), budget: /** @type {string} */ (draft.budget), quantity: /** @type {number} */ (draft.quantity),
+    items, fulfillment: /** @type {Draft['fulfillment']} */ (draft.fulfillment), changed: draft.changed,
+    delivery: { recipient: /** @type {string} */ (delivery.recipient), phone: /** @type {string} */ (delivery.phone), address: /** @type {string} */ (delivery.address) } };
+}
+
+/** Save an explicit, short-lived configuration detour in this tab's session storage.
+ * @param {DraftStorage} storage @param {Draft} draft @param {SessionView | null} session @param {number} step @param {number} [now]
+ * @param {PaidPurchase | null} [completedPaidPurchase]
+ */
+export function saveConfigurationDraft(storage, draft, session, step, now = Date.now(), completedPaidPurchase = null) {
+  const copy = safeDraft(draft);
+  if (!copy) return false;
+  try {
+    storage.setItem(configurationDraftKey, JSON.stringify({ version: 1, createdAt: now, sessionId: session?.id ?? null,
+      revision: session?.revision ?? null, step, draft: copy,
+      paidPurchase: paidPurchaseContext(session) ?? (session ? null : safePaidPurchase(completedPaidPurchase)) }));
+    return true;
+  } catch { return false; }
+}
+
+/** @param {DraftStorage} storage */
+export function clearConfigurationDraft(storage) {
+  try { storage.removeItem(configurationDraftKey); } catch { /* Storage may be disabled; no persistent fallback. */ }
+}
+
+/** Read without trusting storage contents; a returning buyer consumes and deletes the record immediately.
+ * @param {DraftStorage} storage @param {boolean} [consume] @param {number} [now]
+ * @returns {ConfigurationDraft | null}
+ */
+export function readConfigurationDraft(storage, consume = false, now = Date.now()) {
+  try {
+    const text = storage.getItem(configurationDraftKey);
+    if (consume) clearConfigurationDraft(storage);
+    if (!text) return null;
+    if (text.length > 16384) throw new Error();
+    const value = /** @type {Record<string, unknown>} */ (JSON.parse(text));
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 1
+      || typeof value.createdAt !== 'number' || !Number.isFinite(value.createdAt) || now < value.createdAt || now - value.createdAt > configurationDraftLifetime
+      || !(value.sessionId === null || (typeof value.sessionId === 'string' && /^[a-zA-Z0-9_-]{1,256}$/.test(value.sessionId)))
+      || !(value.revision === null || (typeof value.revision === 'number' && Number.isSafeInteger(value.revision) && value.revision >= 0))
+      || typeof value.step !== 'number' || !Number.isInteger(value.step) || value.step < 0 || value.step > 3) throw new Error();
+    const draft = safeDraft(value.draft);
+    if (!draft) throw new Error();
+    const paidPurchase = safePaidPurchase(value.paidPurchase);
+    if (value.paidPurchase !== undefined && value.paidPurchase !== null && !paidPurchase) throw new Error();
+    return { version: 1, createdAt: value.createdAt, sessionId: value.sessionId, revision: value.revision, step: value.step, draft, paidPurchase };
+  } catch { clearConfigurationDraft(storage); return null; }
+}
 
 /** @returns {PageState} */
 export function createPageState() {

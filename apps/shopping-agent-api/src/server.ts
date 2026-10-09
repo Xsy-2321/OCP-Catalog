@@ -1,10 +1,11 @@
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createPrivateKey } from 'node:crypto';
-import { createHttpRuntime, createMockRuntime, createConfiguredShoppingModel, runShoppingAgent, FlowError, publicError,
+import { createHttpRuntime, createMockRuntime, runShoppingAgent, FlowError, publicError,
   SHOPPING_CONTRACT_VERSION, type ShoppingCoordinator, type ShoppingModelClient } from '@ocp-catalog/agent-runtime';
 import { createMerchantDemoHandler, isMerchantDemoPath, type MerchantDemoReader } from './merchant-demo';
 import { parseConfigView, parseAgentRunView, parsePendingSessionsView } from '@ocp-catalog/shopping-contracts/browser';
+import { createLocalModelSettings, type LocalModelSettings } from './model-settings';
 
 const STATIC_ROOT = resolve(import.meta.dir, '../../shopping-agent-web/public');
 const COOKIE = 'ocp_shopping_session';
@@ -17,7 +18,7 @@ const cookiePattern = /^[a-f0-9]{64}$/;
 
 /** Local development identity, NOT a production account or login system. */
 export function createHandler(coordinator: ShoppingCoordinator, options: {
-  allowedHost?: string; model?: ShoppingModelClient; merchantDemo?: MerchantDemoReader;
+  allowedHost?: string; model?: ShoppingModelClient; modelSettings?: LocalModelSettings; merchantDemo?: MerchantDemoReader;
 } = {}) {
   const modelRuns = new Set<string>();
   const merchantDemo = options.merchantDemo
@@ -41,6 +42,20 @@ export function createHandler(coordinator: ShoppingCoordinator, options: {
       const fetchSite = request.headers.get('sec-fetch-site');
       if ((origin && origin !== url.origin) || (fetchSite && !['same-origin', 'none'].includes(fetchSite))) {
         throw new FlowError('forbidden', '不接受跨站请求。', 403);
+      }
+      const settingsAssets: Record<string, { file: string; type: string }> = {
+        '/demo': { file: 'demo.html', type: 'text/html; charset=utf-8' },
+        '/demo.html': { file: 'demo.html', type: 'text/html; charset=utf-8' },
+        '/model-settings.js': { file: 'model-settings.js', type: 'text/javascript; charset=utf-8' },
+        '/model-settings.css': { file: 'model-settings.css', type: 'text/css; charset=utf-8' },
+        '/merchant.css': { file: 'merchant.css', type: 'text/css; charset=utf-8' },
+      };
+      const settingsAsset = Object.hasOwn(settingsAssets, url.pathname) ? settingsAssets[url.pathname] : undefined;
+      if (settingsAsset && request.method === 'GET') {
+        if (url.search) throw new FlowError('invalid_request', '演示入口参数无效。');
+        return new Response(await readFile(join(STATIC_ROOT, settingsAsset.file)), { headers: {
+          ...securityHeaders, 'content-type': settingsAsset.type,
+        } });
       }
       // Merchant-only requests are dispatched before creating or replacing any
       // shopping identity; their role cookie has its own API path and lifetime.
@@ -67,12 +82,13 @@ export function createHandler(coordinator: ShoppingCoordinator, options: {
         .find(part => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
       const userId = cookieValue && cookiePattern.test(cookieValue) ? cookieValue : (newCookie = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', ''));
       if (url.pathname === '/api/config' && request.method === 'GET') {
+        const model = options.modelSettings ? options.modelSettings.getModel() : options.model;
         const health = await coordinator.inspectHealth();
         const status = coordinator.mode === 'mock' ? 'mock' : health.ready ? 'online' : 'offline';
         return response(parseConfigView({ mode: coordinator.mode, merchant_id: coordinator.merchantId,
           ...(merchantDemo ? { merchant_demo_available: true } : {}),
           payment_mode: 'local_simulated', c0_status: 'integrated', contract_version: SHOPPING_CONTRACT_VERSION,
-          llm_status: options.model ? 'configured' : 'not_configured', llm_model: options.model?.model ?? null,
+          llm_status: model ? 'configured' : 'not_configured', llm_model: model?.model ?? null,
           merchant_health: { status, message: status === 'mock' ? '独立本地样例模式'
             : status === 'online' ? '商家服务在线' : '商家服务暂时不可用，请检查商家进程。', checked_at: health.checked_at } }));
       }
@@ -87,14 +103,27 @@ export function createHandler(coordinator: ShoppingCoordinator, options: {
             body = parsed;
           } catch { throw new FlowError('invalid_request', 'JSON 请求无效。'); }
         }
+        if (url.pathname === '/api/model-settings' || url.pathname.startsWith('/api/model-settings/')) {
+          if (!options.modelSettings) throw new FlowError('model_settings_unavailable', '本机模型配置未启用。', 503);
+          if (url.search) throw new FlowError('invalid_request', '模型配置接口不接受查询参数。');
+          if (url.pathname === '/api/model-settings' && request.method === 'GET') return response(options.modelSettings.view());
+          if (url.pathname === '/api/model-settings' && request.method === 'POST') return response(await options.modelSettings.save(body));
+          if (url.pathname === '/api/model-settings/test' && request.method === 'POST') return response(await options.modelSettings.test(body));
+          if (url.pathname === '/api/model-settings/clear' && request.method === 'POST') {
+            if (Object.keys(body).length) throw new FlowError('invalid_request', '清除配置请求须为空对象。');
+            return response(await options.modelSettings.clear());
+          }
+          throw new FlowError('method_not_allowed', '模型配置接口仅支持规定的 GET / POST 请求。', 405);
+        }
         if (url.pathname === '/api/sessions/pending' && request.method === 'GET') {
           return response(parsePendingSessionsView({ sessions: await coordinator.listPending(userId) }));
         }
         if (url.pathname === '/api/agent/run' && request.method === 'POST') {
-          if (!options.model) throw new FlowError('model_not_configured', '请在后端 .env 填入 DEEPSEEK_API_KEY 并重启服务，然后使用 Agent 规划。', 503);
+          const model = options.modelSettings ? options.modelSettings.getModel() : options.model;
+          if (!model) throw new FlowError('model_not_configured', '请先在演示入口配置 API 地址、模型和 API Key，再使用 Agent 规划。', 503);
           if (modelRuns.has(userId)) throw new FlowError('agent_busy', '此身份已有 Agent 规划正在进行，请等待结果。', 429);
           modelRuns.add(userId);
-          try { return response(parseAgentRunView(await runShoppingAgent(coordinator, userId, body, options.model))); }
+          try { return response(parseAgentRunView(await runShoppingAgent(coordinator, userId, body, model))); }
           finally { modelRuns.delete(userId); }
         }
         if (url.pathname === '/api/sessions' && request.method === 'POST') return response(await coordinator.create(userId, body), 201);
@@ -189,15 +218,15 @@ if (import.meta.main) {
   const release = await acquireDataLock(directory);
   try {
     const coordinator = await createConfiguredRuntime(directory);
-    const model = createConfiguredShoppingModel();
+    const modelSettings = await createLocalModelSettings(resolve(import.meta.dir, '../../../.codex-tmp/shopping-model/settings.json'));
     const server = Bun.serve({ hostname: '127.0.0.1', port, idleTimeout: 255,
-      fetch: createHandler(coordinator, { allowedHost: `127.0.0.1:${port}`, model }) });
+      fetch: createHandler(coordinator, { allowedHost: `127.0.0.1:${port}`, modelSettings }) });
     let closing = false;
     const close = async () => {
       if (closing) return; closing = true;
       await server.stop(false); await coordinator.waitForIdle(); await release(); process.exit(0);
     };
     process.on('SIGINT', () => { void close(); }); process.on('SIGTERM', () => { void close(); });
-    console.log(`购物助手 ${coordinator.mode.toUpperCase()}: http://127.0.0.1:${server.port} (contract ${SHOPPING_CONTRACT_VERSION}; model ${model?.model ?? 'not configured'}; local simulated payment only)`);
+    console.log(`购物助手 ${coordinator.mode.toUpperCase()}: http://127.0.0.1:${server.port}/demo (contract ${SHOPPING_CONTRACT_VERSION}; model ${modelSettings.getModel()?.model ?? 'not configured'}; local simulated payment only)`);
   } catch (error) { await release(); throw error; }
 }

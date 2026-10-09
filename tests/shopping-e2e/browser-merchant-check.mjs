@@ -41,9 +41,18 @@ const current = () => user.evaluate(async () => (await fetch(`/api/sessions/${lo
 async function refreshShop() { await shop.locator('#merchant-refresh').click(); await shopIdle(); }
 function stock(state, entry) { return state.stock.find(row => row.entry_id === entry).available_quantity; }
 try {
+  // This isolated browser rehearsal now enters through the first-use API gate.
+  // Save a local dummy configuration; the test only uses manual shopping.
+  const configured = await context.request.post(`${base}/api/model-settings`, { data: {
+    protocol: 'openai', base_url: 'http://127.0.0.1:9/v1', model: 'local-unused-fixture',
+    api_key: 'merchant-browser-fixture-only', timeout_ms: 1000,
+  } });
+  assert(configured.ok(), 'Isolated demo settings unlock the entry view without a model request');
   await shop.goto(`${base}/demo`);
+  await shop.locator('#demo-entry-view').waitFor();
   assert(await shop.locator('#user-demo-entry').getAttribute('href') === '/?start=1' && await shop.locator('#merchant-demo-entry').getAttribute('href') === '/merchant', 'Portal provides a fresh buyer entry and a distinct merchant entry');
   assert((await shop.locator('body').textContent()).includes('非'), 'Portal identifies local demo rather than a real login');
+  requests.length = 0; // Merchant request assertions begin with the merchant view.
   await user.goto(base); await userIdle();
   const buyerCookies = await context.cookies(`${base}/`);
   const buyerId = buyerCookies.find(cookie => cookie.name === 'ocp_shopping_session').value;

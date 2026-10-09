@@ -39,11 +39,12 @@ async function readManifest(directory: string): Promise<PreviewManifest> {
 }
 
 /** New preview: empty private directory and OS-selected ports. Resume: same data/key/origins. */
-export async function startShoppingPreview(options: { directory?: string; env?: Record<string, string | undefined> } = {}): Promise<ShoppingDemo> {
+export async function startShoppingPreview(options: { directory?: string; env?: Record<string, string | undefined>; modelSettingsPath?: string } = {}): Promise<ShoppingDemo> {
   const directory = options.directory ? resolve(options.directory) : undefined;
   const manifest = directory ? await readManifest(directory) : undefined;
   const demo = await startShoppingDemo({ dataDir: directory ?? PREVIEW_ROOT, newSession: !directory,
     shoppingPort: manifest?.shopping_port ?? 0, merchantPort: manifest?.merchant_port ?? 0,
+    ...(options.modelSettingsPath ? { modelSettingsPath: options.modelSettingsPath } : {}),
     ...(options.env ? { env: options.env } : {}) });
   try {
     if (!manifest) await writeFile(join(demo.directory, MANIFEST), JSON.stringify({ version: 1,
@@ -58,7 +59,8 @@ async function main() {
   const demo = await startShoppingPreview({ directory: process.env.SHOPPING_PREVIEW_DATA_DIR?.trim() || undefined });
   console.log(`演示门户：${demo.demoPortalUrl}\n用户演示入口：${demo.userDemoUrl}\n商家演示入口：${demo.merchantDemoUrl}`);
   console.log(`数据目录：${demo.directory}\n商家后台：${demo.merchantOrigin}`);
-  console.log(`模型：${demo.modelName ?? '未配置，可手动搜索'}（启动不调用模型）`);
+  console.log(`模型：${demo.modelName ?? '未配置，请在演示入口填写 API；也可手动搜索'}（启动不调用模型）`);
+  console.log(`API 配置：${demo.demoPortalUrl}#api-configuration（保存后立即生效，下次启动沿用）`);
   console.log('本机演示身份，非正式登录；商家只读；模拟支付和模拟履约。原演示目录不受影响。');
   console.log('停止用 Ctrl+C。恢复这轮预览：');
   console.log(`$env:SHOPPING_PREVIEW_DATA_DIR='${demo.directory.replaceAll("'", "''")}'\nbun run shopping:preview`);

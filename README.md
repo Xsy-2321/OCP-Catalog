@@ -23,23 +23,28 @@ Production reference applications live in a separate repo — see [Reference app
 
 ## Shopping application: 一杯之间
 
-A working application built on OCP: manual search or DeepSeek V4.1 Flash planning,
+A working application built on OCP: manual search or user-configured model planning,
 final all-in quotes, explicit user authorization, persistent inventory and recovery
 of the original order after a lost checkout response. Payment is simulated locally.
 
 ```powershell
 bun install --frozen-lockfile
-Copy-Item .env.example .env # first setup only; keep any existing .env
-# Fill DEEPSEEK_API_KEY in .env to enable Agent mode. The field is empty by default.
 bun run shopping:demo:check
 bun run shopping:demo
 ```
 
-Open http://127.0.0.1:4310. The demo starts both the shopping application and the
+Open http://127.0.0.1:4310/demo and fill in your model API configuration on first use.
+The demo starts both the shopping application and the
 merchant, and stores its keys, orders and inventory in `.codex-tmp/shopping-demo`.
-Manual search works with an empty model key. Agent mode makes actual Chat
-Completions requests using `deepseek-flash`; it can search and request quotes,
-and waits for the user's purchase confirmation. The API key stays on the backend.
+Manual search works before configuration. The settings panel supports OpenAI-compatible
+Chat Completions (including DeepSeek), Anthropic Messages and Gemini generateContent
+with function calling. Enter the API type, base URL, model name, your API key and
+request timeout. Test a draft or save it to apply immediately without restarting.
+Copy `.env.example` to `.env` only if you want to change optional ports or data paths.
+Settings persist in ignored `.codex-tmp/shopping-model/settings.json`; the key is
+never returned to the browser or stored in browser storage. The CLI ignores legacy
+model keys in `.env`. The agent can search and request quotes and waits for explicit
+purchase confirmation.
 
 - [Application setup and recovery](docs/shopping-agent/README.md)
 - [Competition demo script and contribution scope](docs/shopping-agent/COMPETITION.md)

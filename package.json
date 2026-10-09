@@ -37,6 +37,8 @@
     "shopping:merchant:browser": "bun run runtime:check && bun run shopping:ui:prepare && bun tests/shopping-e2e/merchant-browser-server.ts",
     "shopping:merchant:presentation:browser": "bun run runtime:check && bun run shopping:ui:prepare && node tests/shopping-e2e/merchant-presentation-check.mjs",
     "shopping:portal:browser": "bun run runtime:check && bun run shopping:ui:prepare && node tests/shopping-e2e/portal-entry-browser-check.mjs",
+    "shopping:settings:browser": "bun run runtime:check && bun run shopping:ui:prepare && bun tests/shopping-e2e/model-settings-browser-server.ts",
+    "shopping:configuration:browser": "bun run runtime:check && bun run shopping:ui:prepare && node apps/shopping-agent-web/scripts/configuration-draft-browser-check.mjs",
     "shopping:check": "bun run runtime:check && bun run --cwd packages/agent-runtime typecheck && bun run --cwd apps/shopping-agent-api typecheck && bun run --cwd apps/shopping-agent-web typecheck && tsc -p tests/shopping-e2e/tsconfig.json --noEmit",
     "shopping:test": "bun run runtime:check && bun run shopping:ui:prepare && bun test packages/agent-runtime apps/shopping-agent-api tests/shopping-e2e",
     "coffee:check": "bun run runtime:check && bun run --cwd apps/coffee-merchant-api check && bun run --cwd apps/coffee-merchant-api typecheck",

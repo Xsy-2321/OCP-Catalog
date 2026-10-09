@@ -1,13 +1,21 @@
 import { isPendingPurchase, parseSessionView, parseConfigView, parseAgentRunView, parsePendingSessionsView } from './contracts.js';
 import { getElement as $, getControl, getField, getInput, node } from './dom.js';
 import { ApiError, errorMessage, request } from './api-client.js';
-import { createPageState, deriveViewModel, draftFromSession, draftQuantity } from './view-model.js';
+import { createPageState, deriveViewModel, draftFromSession, draftQuantity, saveConfigurationDraft, readConfigurationDraft, clearConfigurationDraft,
+  paidPurchaseContext, canRestoreConfigurationDraft } from './view-model.js';
 
   const storageKey = 'ocp-shopping-session-id';
   const updateKey = 'ocp-shopping-update';
   const state = createPageState();
   const entryUrl = new URL(window.location.href);
   const startAtRequest = entryUrl.searchParams.get('start') === '1';
+  /** @type {import('./view-model.js').ConfigurationDraft | null} */
+  let configurationDraft = null;
+  try { configurationDraft = readConfigurationDraft(sessionStorage, true); } catch { /* A disabled session store cannot carry a detour. */ }
+  /** @type {import('./view-model.js').PaidPurchase | null} */
+  let completedPaidPurchase = null;
+  let initializing = true;
+  let pendingObservedDuringInitialization = false;
   if (startAtRequest) {
     // Only the portal may start a fresh view after payment; ordinary reloads restore it.
     entryUrl.searchParams.delete('start');
@@ -191,6 +199,7 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
     try {
       const result = await request('/api/sessions/pending', parsePendingSessionsView);
       state.uiStatus.pendingSessions = result.sessions.filter(unresolved);
+      if (initializing && state.uiStatus.pendingSessions.length) pendingObservedDuringInitialization = true;
       state.uiStatus.pendingCheckFailed = false;
       const pending = state.uiStatus.pendingSessions.find(value => value.id === state.serverSession?.id) || state.uiStatus.pendingSessions[0];
       if (pending) {
@@ -230,11 +239,11 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
     const connection = state.uiStatus.connectionFailed ? '连接状态未能确认，请重新检查。'
       : health?.status === 'offline' ? '暂时无法连接商家，请稍后重新检查。'
       : health?.status === 'online' ? '已连接本地咖啡店。' : '固定样例流程 · 本地模拟付款';
-    const model = llmReady() ? 'Agent 可以帮你选择咖啡' : 'Agent 暂不可用，可使用关键词检索';
+    const model = llmReady() ? 'Agent 可以帮你选择咖啡' : '首次使用 Agent，请在演示入口配置自己的 API';
     $('runtime-note').textContent = `${connection}\n${model}\n本地模拟付款 · 每笔由你确认`;
     $('model-note').textContent = llmReady()
       ? 'Agent 会理解偏好、查询并推荐。可同时要不同商品，总预算和总杯数由表单限定。'
-      : 'Agent 暂不可用，现在可切换为关键词检索。';
+      : '尚未配置模型 API。点击下方链接填写自己的 API 密钥（API Key）并保存；返回购物页会自动更新，关键词检索可直接使用。';
     getControl('connection-check').disabled = state.uiStatus.busy;
   }
   function renderPending() {
@@ -467,7 +476,7 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
       if (locked()) throw new Error('请先查询原购买结果，再提交新的需求。');
       if (!state.configuration) throw new Error('商家配置尚未加载，请重新检查连接。');
       if (mode === 'agent') {
-        if (!llmReady()) throw new Error('Agent 暂不可用，请切换为关键词检索。');
+        if (!llmReady()) throw new Error('请先在演示入口配置自己的 API，或切换为关键词检索。');
         const result = await request('/api/agent/run', parseAgentRunView, { message, max_total_minor: minor, quantity, fulfillment, ...(delivery ? { delivery } : {}) }, 120_000);
         adopt(result.session, true); state.plannerResult = result;
       } else {
@@ -508,6 +517,18 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
   getControl('recover-button').addEventListener('click', () => { void action('recover'); });
   getControl('pending-check').addEventListener('click', () => { void refreshStatus(true); });
   getControl('connection-check').addEventListener('click', () => { void refreshStatus(true); });
+  $('shopping-api-configuration').addEventListener('click', event => {
+    const link = event.currentTarget;
+    if (!(link instanceof HTMLAnchorElement)) return;
+    // A second tab preserves the live form itself; do not copy a private draft there.
+    if (event instanceof MouseEvent && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0)) return;
+    if (state.uiStatus.busy && !state.uiStatus.backgroundChecking) { event.preventDefault(); notify('当前操作完成后再打开 API 配置。', 'warning'); return; }
+    captureDraft();
+    let stored = false;
+    try { stored = saveConfigurationDraft(sessionStorage, state.draft, state.serverSession, shownStep, Date.now(), completedPaidPurchase); } catch { /* No browser storage in some private sessions. */ }
+    if (stored) link.removeAttribute('target');
+    else { link.target = '_blank'; link.rel = 'noopener'; }
+  });
   document.querySelectorAll('.prompt-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       if (!deriveViewModel(state, Date.now()).actions.edit) return;
@@ -544,7 +565,11 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
   document.querySelectorAll('[data-flow-panel]').forEach(panel => flowObserver.observe(panel));
   window.addEventListener('storage', event => { if ([storageKey, updateKey, null].includes(event.key)) void refreshStatus(); });
   window.addEventListener('focus', () => { void refreshStatus(false, true); });
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) { try { clearConfigurationDraft(sessionStorage); } catch { /* Nothing was persisted. */ } void refreshStatus(false, true); }
+  });
   async function initialize() {
+    let factsRestored = false;
     state.uiStatus.busy = true; render();
     try { await updateConfiguration(); }
     catch (error) { notify(errorMessage(error, '暂时无法连接本地助手。'), 'error'); }
@@ -558,6 +583,7 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
         if (id) {
           try {
             const restored = await api(`/api/sessions/${encodeURIComponent(id)}`);
+            if (unresolved(restored)) pendingObservedDuringInitialization = true;
             adopt(restored, true);
             if (restored.attempt) adopt(await api(`/api/sessions/${restored.id}/recover`, {}));
           } catch (error) {
@@ -569,12 +595,14 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
         }
       }
       remember();
+      factsRestored = true;
     } catch (error) { notify(errorMessage(error, '暂时无法恢复购买记录，请重试查询。'), 'error'); }
     finally {
       if (startAtRequest && !locked() && state.serverSession?.phase === 'confirmed'
         && state.serverSession.attempt?.status === 'confirmed'
         && state.serverSession.order?.payment_status === 'paid') {
         // Keep unpaid progress and uncertainty; reset only the projection of a paid purchase.
+        completedPaidPurchase = factsRestored ? paidPurchaseContext(state.serverSession) : null;
         state.serverSession = null;
         state.plannerResult = null;
         state.draft = createPageState().draft;
@@ -582,7 +610,15 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
         state.uiStatus.basketChoices.clear();
         renderDraftForm(state.draft);
         showStep(0, false);
+      } else if (configurationDraft && !startAtRequest
+        && canRestoreConfigurationDraft(configurationDraft, state, factsRestored, pendingObservedDuringInitialization)) {
+        // Local form fields cannot replace pending/server facts or authorize a stale quote.
+        state.draft = configurationDraft.draft;
+        renderDraftForm(state.draft);
+        showStep(configurationDraft.step, false);
       } else if (state.serverSession) showStep(deriveViewModel(state, Date.now()).step, false);
+      configurationDraft = null;
+      initializing = false;
       finish();
     }
   }
