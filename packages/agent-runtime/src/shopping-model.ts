@@ -1,6 +1,6 @@
 import { FlowError } from './errors';
 import type { DeliveryAddress } from '@ocp-catalog/shopping-contracts';
-import { abortable, requestSignal } from './cancellation';
+import { abortable } from './cancellation';
 import { hasUntriedQuote, quoteFingerprint, runToolLoop, type Planner, type PlannerStep } from './tool-loop';
 import { parseIntent } from './validation';
 import type { ShoppingCoordinator } from './coordinator';
@@ -9,8 +9,10 @@ import type { Candidate, Intent, PublicSession } from './types';
 export const DEFAULT_SHOPPING_MODEL = 'deepseek-flash';
 export const DEFAULT_SHOPPING_MODEL_BASE_URL = 'https://api.deepseek.com';
 export const SHOPPING_AGENT_DEADLINE_MS = 110_000;
+export type ShoppingModelProtocol = 'openai' | 'anthropic' | 'gemini';
 export interface ShoppingModelOptions {
   apiKey: string;
+  protocol?: ShoppingModelProtocol;
   baseUrl?: string;
   model?: string;
   timeoutMs?: number;
@@ -81,52 +83,274 @@ function boundedText(value: unknown, limit: number): string {
   return value.trim();
 }
 
-/** Backend-only OpenAI-compatible Chat Completions client. No automatic retries or mock fallback. */
+function normalizedCall(id: unknown, name: unknown, args: unknown): ToolCall {
+  if (typeof id !== 'string' || !/^[\w-]{1,128}$/.test(id)
+    || typeof name !== 'string' || !/^[\w-]{1,128}$/.test(name)
+    || typeof args !== 'string' || args.length > 8192) throw invalidModel();
+  return { id, type: 'function', function: { name, arguments: args } };
+}
+function jsonArguments(value: unknown): string {
+  return JSON.stringify(record(value));
+}
+function geminiV1Parameters(schema: Record<string, unknown>): Record<string, unknown> | undefined {
+  // Stable v1 accepts the OpenAPI Schema message, not v1beta's parametersJsonSchema.
+  // Unsupported closed-object/non-string-enum constraints remain enforced by the
+  // caller's existing validators (shopping argumentsOf or the connection check).
+  if (schema.type === 'object' && !Object.keys(record(schema.properties ?? {})).length) return undefined;
+  const incompatible = () => new FlowError('model_configuration_failed',
+    '当前工具定义需要 Gemini v1beta，请将 API 地址中的 /v1 改为 /v1beta。', 502);
+  if (typeof schema.type !== 'string' || !['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'].includes(schema.type)) throw incompatible();
+  const converted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === 'additionalProperties' && value === false) continue;
+    if (key === 'type' && typeof value === 'string') converted.type = value.toUpperCase();
+    else if (key === 'properties') converted.properties = Object.fromEntries(Object.entries(record(value))
+      .map(([name, property]) => [name, geminiV1Parameters(record(property)) ?? { type: 'OBJECT' }]));
+    else if (key === 'items') converted.items = geminiV1Parameters(record(value)) ?? { type: 'OBJECT' };
+    else if (['minItems', 'maxItems', 'minLength', 'maxLength', 'minProperties', 'maxProperties'].includes(key)) {
+      if (!Number.isSafeInteger(value) || (value as number) < 0) throw incompatible();
+      converted[key] = String(value);
+    } else if (key === 'enum') {
+      if (!Array.isArray(value) || !value.length) throw incompatible();
+      if (schema.type === 'string' && value.every(item => typeof item === 'string')) converted.enum = value;
+      else if (schema.type === 'boolean' && value.every(item => typeof item === 'boolean')) continue;
+      else if (['number', 'integer'].includes(schema.type) && value.every(item => typeof item === 'number' && Number.isFinite(item))) continue;
+      else throw incompatible();
+    } else if (['description', 'required', 'minimum', 'maximum', 'format', 'nullable', 'title', 'pattern'].includes(key)) converted[key] = value;
+    else throw incompatible();
+  }
+  return converted;
+}
+function modelEndpoint(protocol: ShoppingModelProtocol, model: string, configuredBase?: string): { endpoint: string; deepseek: boolean; modernOpenAI: boolean } {
+  const defaults = { openai: DEFAULT_SHOPPING_MODEL_BASE_URL, anthropic: 'https://api.anthropic.com',
+    gemini: 'https://generativelanguage.googleapis.com/v1beta' };
+  let base: URL;
+  try { base = new URL(configuredBase ?? defaults[protocol]); }
+  catch { throw new Error('API Base URL 必须为有效的 HTTPS 地址或本机 HTTP 地址。'); }
+  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname);
+  if ((base.protocol !== 'https:' && !(base.protocol === 'http:' && loopback))
+    || base.username || base.password || base.search || base.hash) {
+    throw new Error('API Base URL 必须为 HTTPS 地址或本机 HTTP 地址，不能含凭据、查询串或片段。');
+  }
+  let path = base.pathname.replace(/\/+$/, '');
+  if (protocol === 'openai') {
+    if (!path.endsWith('/chat/completions')) path += '/chat/completions';
+  } else if (protocol === 'anthropic') {
+    if (!path.endsWith('/messages')) path += path.endsWith('/v1') ? '/messages' : '/v1/messages';
+  } else {
+    const modelId = model.replace(/^models\//, '');
+    if (!/^[a-zA-Z0-9._-]{1,128}$/.test(modelId)) throw new Error('Gemini 模型名称无效。');
+    const fullEndpoint = /\/models\/([^/]+):generateContent$/.exec(path);
+    if (fullEndpoint) {
+      if (fullEndpoint[1] !== modelId) throw new Error('Gemini 完整 API 地址中的模型必须与模型名称一致。');
+    } else {
+      path = path.replace(/\/models$/, '');
+      if (!/\/v1(?:beta)?$/.test(path)) path += '/v1beta';
+      path += `/models/${modelId}:generateContent`;
+    }
+  }
+  base.pathname = path;
+  return { endpoint: base.href, deepseek: base.hostname === 'api.deepseek.com',
+    modernOpenAI: base.hostname === 'api.openai.com' && /^(?:o[1-9][0-9]*(?:$|[-.])|gpt-(?:[5-9]|[1-9][0-9]+)(?:$|[-.]))/.test(model) };
+}
+
+type NativeContent = { role: 'user' | 'assistant' | 'model'; parts: Record<string, unknown>[] };
+function appendNative(messages: NativeContent[], role: NativeContent['role'], parts: Record<string, unknown>[]): void {
+  if (!parts.length) return;
+  const previous = messages.at(-1);
+  if (previous?.role === role) previous.parts.push(...parts);
+  else messages.push({ role, parts });
+}
+function systemText(messages: Message[]): string {
+  return messages.filter(message => message.role === 'system').map(message => message.content ?? '').join('\n');
+}
+function anthropicMessages(messages: Message[]): { role: 'user' | 'assistant'; content: Record<string, unknown>[] }[] {
+  const converted: NativeContent[] = [];
+  for (const message of messages) {
+    if (message.role === 'system') continue;
+    if (message.role === 'tool') {
+      appendNative(converted, 'user', [{ type: 'tool_result', tool_use_id: message.tool_call_id, content: message.content ?? '' }]);
+    } else {
+      const parts: Record<string, unknown>[] = message.content ? [{ type: 'text', text: message.content }] : [];
+      for (const call of message.tool_calls ?? []) parts.push({ type: 'tool_use', id: call.id,
+        name: call.function.name, input: record(JSON.parse(call.function.arguments)) });
+      appendNative(converted, message.role, parts);
+    }
+  }
+  return converted.map(message => ({ role: message.role as 'user' | 'assistant', content: message.parts }));
+}
+
+/** Backend-only tool client for OpenAI-compatible, Anthropic and Gemini APIs. No retries or mock fallback. */
 export class ShoppingModelClient {
   readonly model: string;
   readonly timeoutMs: number;
+  readonly protocol: ShoppingModelProtocol;
   private readonly endpoint: string;
+  private readonly deepseek: boolean;
+  private readonly modernOpenAI: boolean;
+  private readonly geminiV1: boolean;
   private readonly apiKey: string;
   private readonly fetcher: typeof globalThis.fetch;
+  // Gemini 3 requires the original signed response parts and native function id in history.
+  private readonly geminiCalls = new Map<string, { name: string; nativeId?: string; parts: Record<string, unknown>[] }>();
+  private nextGeminiCallId = 0;
   private deadline?: number;
   private runSignal?: AbortSignal;
   constructor(options: ShoppingModelOptions) {
-    this.apiKey = options.apiKey.trim();
-    if (!this.apiKey || /[\r\n]/.test(this.apiKey)) throw new Error('DEEPSEEK_API_KEY 必须为有效的后端密钥。');
-    this.model = options.model?.trim() || DEFAULT_SHOPPING_MODEL;
-    if (!/^[a-zA-Z0-9._:/-]{1,128}$/.test(this.model)) throw new Error('SHOPPING_LLM_MODEL 无效。');
+    this.apiKey = typeof options.apiKey === 'string' ? options.apiKey.trim() : '';
+    if (!this.apiKey || this.apiKey.length > 4096 || /[\r\n\x00-\x1f\x7f]/.test(this.apiKey)) throw new Error('API Key 必须为有效的后端密钥。');
+    this.protocol = options.protocol ?? 'openai';
+    if (!['openai', 'anthropic', 'gemini'].includes(this.protocol)) throw new Error('API 协议无效。');
+    const defaultModels = { openai: DEFAULT_SHOPPING_MODEL, anthropic: 'claude-sonnet-4-6', gemini: 'gemini-2.5-flash' };
+    this.model = options.model?.trim() || defaultModels[this.protocol];
+    if (!/^[a-zA-Z0-9._:/-]{1,128}$/.test(this.model)) throw new Error('API 模型名称无效。');
     this.timeoutMs = options.timeoutMs ?? 30_000;
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 100 || this.timeoutMs > 60_000) throw new Error('SHOPPING_LLM_TIMEOUT_MS 必须为 100–60000。');
-    const base = new URL(options.baseUrl ?? DEFAULT_SHOPPING_MODEL_BASE_URL);
-    const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname);
-    if ((base.protocol !== 'https:' && !(base.protocol === 'http:' && loopback)) || base.username || base.password || base.search || base.hash) {
-      throw new Error('SHOPPING_LLM_BASE_URL 必须为 HTTPS 地址或本机 HTTP 地址，不能含凭据、查询串或片段。');
-    }
-    this.endpoint = `${base.href.replace(/\/+$/, '')}/chat/completions`;
+    const address = modelEndpoint(this.protocol, this.model, options.baseUrl);
+    this.endpoint = address.endpoint;
+    this.deepseek = address.deepseek;
+    this.modernOpenAI = address.modernOpenAI;
+    this.geminiV1 = this.protocol === 'gemini' && /\/v1\/models\/[^/]+:generateContent$/.test(new URL(this.endpoint).pathname);
     this.fetcher = options.fetch ?? globalThis.fetch;
   }
 
   forRun(signal?: AbortSignal, deadlineMs = SHOPPING_AGENT_DEADLINE_MS): ShoppingModelClient {
-    const client = new ShoppingModelClient({ apiKey: this.apiKey, model: this.model, timeoutMs: this.timeoutMs,
-      baseUrl: this.endpoint.slice(0, -'/chat/completions'.length), fetch: this.fetcher });
+    const client = new ShoppingModelClient({ apiKey: this.apiKey, protocol: this.protocol, model: this.model, timeoutMs: this.timeoutMs,
+      baseUrl: this.endpoint, fetch: this.fetcher });
     client.deadline = Date.now() + deadlineMs;
     client.runSignal = signal;
     return client;
   }
 
+  private request(messages: Message[], tools: Tool[], forcedTool?: string): { headers: Record<string, string>; body: Record<string, unknown> } {
+    if (this.protocol === 'anthropic') return {
+      headers: { 'content-type': 'application/json', 'x-api-key': this.apiKey, 'anthropic-version': '2023-06-01' },
+      body: { model: this.model, system: systemText(messages), messages: anthropicMessages(messages), max_tokens: 1536, stream: false,
+        tools: tools.map(({ function: fn }) => ({ name: fn.name, description: fn.description, input_schema: fn.parameters })),
+        tool_choice: { type: forcedTool ? 'tool' : 'auto', ...(forcedTool ? { name: forcedTool } : {}), disable_parallel_tool_use: true } },
+    };
+    if (this.protocol === 'gemini') {
+      const contents: NativeContent[] = [];
+      const knownCalls = new Map<string, ToolCall>();
+      for (const message of messages) {
+        if (message.role === 'system') continue;
+        if (message.role === 'tool') {
+          const call = message.tool_call_id ? knownCalls.get(message.tool_call_id) : undefined;
+          if (!call) throw invalidModel();
+          const metadata = this.geminiCalls.get(call.id);
+          let result: unknown;
+          try { result = JSON.parse(message.content ?? '{}'); } catch { result = { result: message.content }; }
+          appendNative(contents, 'user', [{ functionResponse: { name: call.function.name,
+            ...(metadata?.nativeId ? { id: metadata.nativeId } : {}), response: record(result) } }]);
+        } else {
+          const calls = message.tool_calls ?? [];
+          for (const call of calls) knownCalls.set(call.id, call);
+          const saved = calls.length === 1 ? this.geminiCalls.get(calls[0]!.id) : undefined;
+          const parts = saved?.parts ?? [
+            ...(message.content ? [{ text: message.content }] : []),
+            ...calls.map(call => ({ functionCall: { name: call.function.name, args: record(JSON.parse(call.function.arguments)) } })),
+          ];
+          appendNative(contents, message.role === 'assistant' ? 'model' : 'user', parts);
+        }
+      }
+      return { headers: { 'content-type': 'application/json', 'x-goog-api-key': this.apiKey }, body: {
+        systemInstruction: { parts: [{ text: systemText(messages) }] }, contents,
+        tools: [{ functionDeclarations: tools.map(({ function: fn }) => {
+          const parameters = this.geminiV1 ? geminiV1Parameters(fn.parameters) : fn.parameters;
+          return { name: fn.name, description: fn.description,
+            ...(parameters ? { [this.geminiV1 ? 'parameters' : 'parametersJsonSchema']: parameters } : {}) };
+        }) }],
+        toolConfig: { functionCallingConfig: { mode: forcedTool ? 'ANY' : 'AUTO',
+          ...(forcedTool ? { allowedFunctionNames: [forcedTool] } : {}) } },
+        generationConfig: { maxOutputTokens: 1536, candidateCount: 1 },
+      } };
+    }
+    return { headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` }, body: {
+      model: this.model, messages, tools, stream: false,
+      ...(this.modernOpenAI ? { max_completion_tokens: 1536 } : { max_tokens: 1536 }),
+      ...(this.deepseek ? { thinking: { type: 'disabled' } } : {}),
+      tool_choice: forcedTool ? { type: 'function', function: { name: forcedTool } } : 'auto',
+    } };
+  }
+
+  private responseMessage(payload: Record<string, unknown>): ModelMessage {
+    if (this.protocol === 'anthropic') {
+      if (payload.role !== 'assistant' || !['end_turn', 'tool_use', 'stop_sequence'].includes(String(payload.stop_reason))
+        || !Array.isArray(payload.content)) throw invalidModel();
+      const text: string[] = [], calls: ToolCall[] = [];
+      for (const value of payload.content) {
+        const part = record(value);
+        if (part.type === 'text' && typeof part.text === 'string') text.push(part.text);
+        else if (part.type === 'tool_use') calls.push(normalizedCall(part.id, part.name, jsonArguments(part.input)));
+        else throw invalidModel();
+      }
+      if (calls.length > 1 || (payload.stop_reason === 'tool_use') !== (calls.length === 1)) throw invalidModel();
+      return { content: text.length ? text.join('\n').slice(0, 1000) : null, ...(calls.length ? { tool_calls: calls } : {}) };
+    }
+    if (this.protocol === 'gemini') {
+      if (!Array.isArray(payload.candidates) || payload.candidates.length !== 1) throw invalidModel();
+      const candidate = record(payload.candidates[0]);
+      if (candidate.finishReason !== 'STOP') throw invalidModel();
+      const content = record(candidate.content);
+      if (content.role !== 'model' || !Array.isArray(content.parts) || !content.parts.length) throw invalidModel();
+      const parts = content.parts.map(record), text: string[] = [];
+      let nativeCall: Record<string, unknown> | undefined;
+      for (const part of parts) {
+        if (part.thoughtSignature !== undefined && typeof part.thoughtSignature !== 'string') throw invalidModel();
+        if (part.functionCall !== undefined) {
+          if (nativeCall || part.text !== undefined) throw invalidModel();
+          nativeCall = record(part.functionCall);
+        } else if (typeof part.text === 'string') {
+          if (!part.thought) text.push(part.text);
+        } else throw invalidModel();
+      }
+      const message: ModelMessage = { content: text.length ? text.join('\n').slice(0, 1000) : null };
+      if (nativeCall) {
+        if (nativeCall.id !== undefined && (typeof nativeCall.id !== 'string' || !nativeCall.id || nativeCall.id.length > 256)) throw invalidModel();
+        const call = normalizedCall(`gemini_call_${++this.nextGeminiCallId}`, nativeCall.name, jsonArguments(nativeCall.args ?? {}));
+        this.geminiCalls.set(call.id, { name: call.function.name, nativeId: nativeCall.id as string | undefined, parts });
+        message.tool_calls = [call];
+      }
+      return message;
+    }
+    if (!Array.isArray(payload.choices) || payload.choices.length !== 1) throw invalidModel();
+    const choice = record(payload.choices[0]);
+    if (typeof choice.finish_reason !== 'string' || !['stop', 'tool_calls'].includes(choice.finish_reason)) throw invalidModel();
+    const message = record(choice.message);
+    if (message.role !== 'assistant' || (message.content !== null && message.content !== undefined && typeof message.content !== 'string')) throw invalidModel();
+    const content = typeof message.content === 'string' ? message.content.slice(0, 1000) : null;
+    if (message.tool_calls === undefined || message.tool_calls === null || (Array.isArray(message.tool_calls) && message.tool_calls.length === 0)) return { content };
+    if (!Array.isArray(message.tool_calls) || message.tool_calls.length !== 1) throw invalidModel();
+    const raw = record(message.tool_calls[0]), fn = record(raw.function);
+    if (raw.type !== 'function') throw invalidModel();
+    return { content, tool_calls: [normalizedCall(raw.id, fn.name, fn.arguments)] };
+  }
+
   async complete(messages: Message[], tools: Tool[], forcedTool?: string): Promise<ModelMessage> {
-    let response: Response;
-    let signal: AbortSignal;
+    this.runSignal?.throwIfAborted();
+    const remaining = this.deadline === undefined ? this.timeoutMs : Math.min(this.timeoutMs, this.deadline - Date.now());
+    if (remaining <= 0) throw new FlowError('model_timeout', '模型请求超时，请重试或使用手动搜索。', 504);
+    // Keep the deadline alive until the body has finished, including providers that
+    // send headers promptly but stall while streaming the non-streaming response.
+    const controller = new AbortController();
+    const cancelRun = () => controller.abort(this.runSignal!.reason);
+    this.runSignal?.addEventListener('abort', cancelRun, { once: true });
+    const timer = setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), remaining);
     try {
-      const remaining = this.deadline === undefined ? this.timeoutMs : Math.min(this.timeoutMs, this.deadline - Date.now());
-      if (remaining <= 0) throw new DOMException('deadline', 'TimeoutError');
-      signal = requestSignal(this.runSignal, remaining);
+      return await this.completeWithSignal(messages, tools, forcedTool, controller.signal);
+    } finally {
+      clearTimeout(timer);
+      this.runSignal?.removeEventListener('abort', cancelRun);
+    }
+  }
+
+  private async completeWithSignal(messages: Message[], tools: Tool[], forcedTool: string | undefined, signal: AbortSignal): Promise<ModelMessage> {
+    const request = this.request(messages, tools, forcedTool);
+    let response: Response;
+    try {
       response = await abortable(this.fetcher(this.endpoint, {
         method: 'POST', redirect: 'error', credentials: 'omit', signal,
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
-        body: JSON.stringify({ model: this.model, messages, tools, stream: false, max_tokens: 1536,
-          thinking: { type: 'disabled' },
-          tool_choice: forcedTool ? { type: 'function', function: { name: forcedTool } } : 'auto' }),
+        headers: request.headers, body: JSON.stringify(request.body),
       }), signal);
     } catch (error) {
       this.runSignal?.throwIfAborted();
@@ -137,7 +361,8 @@ export class ShoppingModelClient {
     this.runSignal?.throwIfAborted();
     if (!response.ok) {
       await response.body?.cancel();
-      if ([401, 403].includes(response.status)) throw new FlowError('model_auth_failed', '模型密钥未通过校验，请检查后端 DEEPSEEK_API_KEY。', 502);
+      if ([401, 403].includes(response.status)) throw new FlowError('model_auth_failed', '模型密钥未通过校验，请检查 API 配置中的密钥。', 502);
+      if ([400, 404].includes(response.status)) throw new FlowError('model_configuration_failed', '模型服务不接受当前请求，请检查 API 协议、地址、模型名称及工具调用支持。', 502);
       if (response.status === 429) throw new FlowError('model_rate_limited', '模型服务暂时限流，请稍后重试。', 503);
       throw new FlowError('model_unavailable', '模型服务暂时不可用，请重试或使用手动搜索。', 503);
     }
@@ -166,18 +391,7 @@ export class ShoppingModelClient {
       throw invalidModel();
     }
     this.runSignal?.throwIfAborted();
-    if (!Array.isArray(payload.choices) || payload.choices.length !== 1) throw invalidModel();
-    const choice = record(payload.choices[0]);
-    if (typeof choice.finish_reason !== 'string' || !['stop', 'tool_calls'].includes(choice.finish_reason)) throw invalidModel();
-    const message = record(choice.message);
-    if (message.role !== 'assistant' || (message.content !== null && message.content !== undefined && typeof message.content !== 'string')) throw invalidModel();
-    const content = typeof message.content === 'string' ? message.content.slice(0, 1000) : null;
-    if (message.tool_calls === undefined || message.tool_calls === null || (Array.isArray(message.tool_calls) && message.tool_calls.length === 0)) return { content };
-    if (!Array.isArray(message.tool_calls) || message.tool_calls.length !== 1) throw invalidModel();
-    const raw = record(message.tool_calls[0]); const fn = record(raw.function);
-    if (raw.type !== 'function' || typeof raw.id !== 'string' || !/^[\w-]{1,128}$/.test(raw.id)
-      || typeof fn.name !== 'string' || typeof fn.arguments !== 'string' || fn.arguments.length > 8192) throw invalidModel();
-    return { content, tool_calls: [{ id: raw.id, type: 'function', function: { name: fn.name, arguments: fn.arguments } }] };
+    return this.responseMessage(payload);
   }
 
   async extractIntent(message: string, constraints: ModelConstraints): Promise<{ intent: Intent; explanation: string }> {
@@ -372,9 +586,10 @@ function recordInput(value: unknown): Record<string, unknown> {
 }
 
 export function createConfiguredShoppingModel(env: Record<string, string | undefined> = process.env): ShoppingModelClient | undefined {
-  const apiKey = (env.DEEPSEEK_API_KEY ?? env.SHOPPING_LLM_API_KEY ?? '').trim();
+  const apiKey = env.SHOPPING_LLM_API_KEY?.trim() || env.DEEPSEEK_API_KEY?.trim() || '';
   if (!apiKey) return undefined;
-  return new ShoppingModelClient({ apiKey, baseUrl: env.SHOPPING_LLM_BASE_URL?.trim() || undefined,
+  return new ShoppingModelClient({ apiKey, protocol: (env.SHOPPING_LLM_PROTOCOL?.trim() || undefined) as ShoppingModelProtocol | undefined,
+    baseUrl: env.SHOPPING_LLM_BASE_URL?.trim() || undefined,
     model: env.SHOPPING_LLM_MODEL?.trim() || undefined,
     timeoutMs: env.SHOPPING_LLM_TIMEOUT_MS ? Number(env.SHOPPING_LLM_TIMEOUT_MS) : undefined });
 }

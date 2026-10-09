@@ -16,6 +16,7 @@ export const engineeringTypescriptFiles = [
   'packages/agent-runtime/src/session-state.ts',
   'packages/agent-runtime/src/session-store-factory.ts',
   'packages/agent-runtime/src/session-view.ts',
+  'packages/agent-runtime/src/shopping-model.ts',
   'packages/agent-runtime/src/sqlite-storage.ts',
   'packages/agent-runtime/src/sqlite-store.ts',
   'packages/agent-runtime/src/store.ts',
@@ -39,6 +40,7 @@ export const engineeringTypescriptFiles = [
   'apps/coffee-merchant-api/src/server.ts',
   'apps/shopping-agent-api/src/merchant-demo.ts',
   'apps/shopping-agent-api/src/server.ts',
+  'apps/shopping-agent-api/src/model-settings.ts',
 ];
 
 export const engineeringJavascriptFiles = [

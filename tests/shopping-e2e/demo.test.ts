@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { startShoppingDemo, type ShoppingDemo } from '../../scripts/shopping-demo';
-import { SqliteSessionStore, FlowError, ShoppingCoordinator, type PublicSession } from '../../packages/agent-runtime/src';
+import { SqliteSessionStore, FlowError, ShoppingCoordinator, ShoppingModelClient, type PublicSession } from '../../packages/agent-runtime/src';
 
 const scratch = resolve(import.meta.dir, '../../.codex-tmp');
 let directory: string;
@@ -45,7 +45,7 @@ test('preflight checks storage and model configuration without binding sockets o
   const occupiedMerchant = helper(() => { modelCalls++; return new Response('should not be called'); });
   const options = { dataDir: directory, checkOnly: true,
     shoppingPort: occupiedApi.port!, merchantPort: occupiedMerchant.port!,
-    env: { DEEPSEEK_API_KEY: 'local-test-only', SHOPPING_LLM_BASE_URL: occupiedMerchant.url.origin } };
+    env: {}, model: new ShoppingModelClient({ apiKey: 'local-test-only', baseUrl: occupiedMerchant.url.origin }) };
   const checked = await startShoppingDemo(options);
   expect(checked.mode).toBe('check');
   expect(checked.modelStatus).toBe('configured');
@@ -128,7 +128,7 @@ test('shutdown waits for an entered A handler before closing B and releasing the
   const modelRelease = new Promise<void>(resolve => { finish = resolve; });
   const localModel = helper(async () => { entered(); await modelRelease; return Response.json({ choices: [] }); });
   demo = await startShoppingDemo({ dataDir: directory, shoppingPort: 0, merchantPort: 0,
-    env: { DEEPSEEK_API_KEY: 'local-test-only', SHOPPING_LLM_BASE_URL: localModel.url.origin, SHOPPING_LLM_TIMEOUT_MS: '2000' } });
+    env: {}, model: new ShoppingModelClient({ apiKey: 'local-test-only', baseUrl: localModel.url.origin, timeoutMs: 2000 }) });
   const request = fetch(`${demo.shoppingOrigin}/api/agent/run`, { method: 'POST',
     headers: { 'content-type': 'application/json', origin: demo.shoppingOrigin },
     body: JSON.stringify({ message: '买一杯拿铁', quantity: 1, max_total_minor: 3000 }) });

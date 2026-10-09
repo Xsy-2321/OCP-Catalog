@@ -1,5 +1,22 @@
 # Shopping demo pages
 
+The `/demo` portal shows API configuration and the two demo entry cards as separate
+views. A missing local configuration opens setup; saving switches to the entries.
+Saved configuration opens the entries by default, with “更改api配置” in the header
+to edit it. The explicit `/demo#api-configuration` link opens the settings view.
+Users choose an API protocol,
+base URL, model, key and timeout; OpenAI-compatible, Anthropic Messages and Gemini
+generateContent models with function calling are supported. Settings persist on the
+local backend and apply immediately. Keys never return in configuration responses
+or enter browser storage. Saving or clearing in another tab updates the buyer page
+on focus while preserving its draft and purchase state.
+
+Opening API settings from the buyer form carries its editable draft in this tab's
+session storage. The settings page offers “返回购物”; returning consumes the draft
+after server recovery, and keeps any pending purchase locked. API keys are never
+part of this handoff. When session storage is unavailable, settings opens in a new
+tab so the original form remains available.
+
 The user page keeps three kinds of facts separate: `draft` contains editable form
 values, `serverSession` contains the last validated API response, and `uiStatus`
 contains request and recovery state. `deriveViewModel(state, now)` determines

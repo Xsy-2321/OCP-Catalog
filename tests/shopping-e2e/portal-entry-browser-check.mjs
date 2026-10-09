@@ -15,7 +15,7 @@ const output = resolve(process.env.SHOPPING_PORTAL_ENTRY_OUTPUT || resolve(root,
 const storageKey = 'ocp-shopping-session-id';
 const cookieName = 'ocp_shopping_session';
 const cookieValue = 'a'.repeat(64);
-const checks = [], pageErrors = [], requests = [], cases = [], externalRequests = [];
+const checks = [], pageErrors = [], requests = [], cases = [], externalRequests = [], assetFailures = [];
 let purchaseRequests = 0, browser, scenario;
 const at = new Date().toISOString();
 const delivery = { recipient: '上次的收件人', phone: '13800000000', address: '上次地址一号楼' };
@@ -79,7 +79,7 @@ const config = parseConfigView({ mode: 'mock', merchant_id: 'coffee', merchant_d
   merchant_health: { status: 'mock', message: 'local portal-entry fixture', checked_at: at } });
 const emptyPending = parsePendingSessionsView({ sessions: [] });
 const assetMap = new Map([['/', 'index.html'], ['/demo', 'demo.html'],
-  ...['styles.css', 'merchant.css', 'app.js', 'contracts.js', 'view-model.js', 'dom.js', 'api-client.js'].map(file => [`/${file}`, file])]);
+  ...['styles.css', 'merchant.css', 'model-settings.css', 'model-settings.js', 'app.js', 'contracts.js', 'view-model.js', 'dom.js', 'api-client.js', 'coffee-bg.svg'].map(file => [`/${file}`, file])]);
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
   const entry = { scenario: scenario?.name, method: request.method, path: url.pathname, query: url.search };
@@ -92,6 +92,8 @@ const server = createServer(async (request, response) => {
     return json(validated);
   };
   try {
+    if (request.method === 'GET' && url.pathname === '/api/model-settings') return json({ configured: true, protocol: 'openai',
+      base_url: 'https://local-fixture.example/v1', model: 'local-fixture', timeout_ms: 30000, has_api_key: true, source: 'local' });
     if (request.method === 'GET' && url.pathname === '/api/config') return json(config);
     if (request.method === 'GET' && url.pathname === '/api/sessions/pending') {
       if (scenario.pendingFailure) return json({ error: { code: 'pending_unavailable', message: '本地样例的未决查询暂不可用。' } }, 503);
@@ -121,7 +123,7 @@ const server = createServer(async (request, response) => {
     }
     const file = assetMap.get(url.pathname);
     if (!file) return json({ error: 'not_found' }, 404);
-    response.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', 'cache-control': 'no-store' });
+    response.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : 'text/html', 'cache-control': 'no-store' });
     response.end(await readFile(resolve(assets, file)));
   } catch (error) { json({ error: String(error) }, 500); }
 });
@@ -142,12 +144,16 @@ async function openCase(name, options = {}) {
   const page = await context.newPage();
   page.setDefaultTimeout(10_000); page.setDefaultNavigationTimeout(15_000);
   page.on('pageerror', error => pageErrors.push({ scenario: name, message: error.message }));
+  page.on('response', response => {
+    if (assetMap.has(new URL(response.url()).pathname) && response.status() >= 400) assetFailures.push({ scenario: name, url: response.url(), status: response.status() });
+  });
   await page.route('**/*', route => {
     if (route.request().url().startsWith(`${origin}/`)) return route.continue();
     externalRequests.push({ scenario: name, url: route.request().url() });
     return route.abort();
   });
   await page.goto(`${origin}/demo`);
+  await page.waitForFunction(() => !document.getElementById('demo-entry-view').hidden && document.getElementById('api-configuration').hidden);
   await page.evaluate(({ key, pointer }) => {
     localStorage.setItem(key, pointer); localStorage.setItem('portal-preserve-note', 'keep unrelated local data');
   }, { key: storageKey, pointer: options.pointer || oldConfirmed.id });
@@ -245,6 +251,11 @@ async function run() {
       && restored.fulfillment === 'delivery' && restored.delivery[0] === delivery.recipient);
     check('direct root visit reads and recovers the original session', oldReads().length > 0 && caseRequests().some(request => request.path === `/api/sessions/${oldConfirmed.id}/recover`
       && request.attemptId === oldConfirmed.attempt.purchase_attempt_id));
+    await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await settled(page, 3);
+    const refocused = await snapshot(page);
+    check('refreshing configuration on buyer focus preserves the restored order and draft', refocused.orderText === restored.orderText
+      && refocused.quoteText === restored.quoteText && refocused.query === restored.query && refocused.budget === restored.budget
+      && refocused.quantity === restored.quantity && refocused.fulfillment === restored.fulfillment && refocused.step === restored.step);
     await identityRetained(context, page, oldConfirmed.id);
     await context.close();
   }
@@ -400,6 +411,7 @@ async function run() {
       || (request.scenario === 'unpaid-candidates-and-explicit-new-search' && ['/api/sessions', `/api/sessions/${newCreated.id}/search`].includes(request.path)))));
   check('fixture never contacts a live or external origin', externalRequests.length === 0);
   check('all portal entry pages have zero JavaScript page errors', pageErrors.length === 0);
+  check('all portal and buyer static assets load without 404 errors', assetFailures.length === 0);
 }
 let deadline;
 try {
@@ -410,7 +422,7 @@ finally {
   clearTimeout(deadline);
   await browser?.close(); server.closeAllConnections();
   await new Promise(resolveClose => server.close(resolveClose));
-  Object.assign(report, { checksPassed: checks.filter(check => check.passed).length, purchaseRequests, pageErrors, requests, externalRequests, output, finishedAt: new Date().toISOString() });
+  Object.assign(report, { checksPassed: checks.filter(check => check.passed).length, purchaseRequests, pageErrors, assetFailures, requests, externalRequests, output, finishedAt: new Date().toISOString() });
   await writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ passed: report.passed, checks: report.checksPassed, purchaseRequests, pageErrors, failure: report.failure, output }));
 }

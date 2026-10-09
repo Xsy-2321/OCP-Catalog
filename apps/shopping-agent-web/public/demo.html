@@ -3,18 +3,45 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>一杯之间 · 本地演示入口</title>
-  <link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/merchant.css">
+  <link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/merchant.css"><link rel="stylesheet" href="/model-settings.css">
+  <script src="/model-settings.js" type="module"></script>
 </head>
 <body class="demo-surface">
   <div class="page">
-    <header><a class="brand" href="/demo" aria-label="一杯之间演示门户"><span class="brand-icon" aria-hidden="true"></span><span>一杯之间<small>LOCAL COFFEE DEMO</small></span></a><span class="mode">本机演示 · 模拟付款</span></header>
+    <header><a class="brand" href="/demo" aria-label="一杯之间演示门户"><span class="brand-icon" aria-hidden="true"></span><span>一杯之间<small>LOCAL COFFEE DEMO</small></span></a><div class="demo-header-actions"><a id="model-return-shopping" class="demo-config-link" href="/" hidden>返回购物</a><a id="model-edit-config" class="demo-config-link" href="#api-configuration" hidden>更改api配置</a><span class="mode">本机演示 · 模拟付款</span></div></header>
     <main class="demo-main">
-      <section class="demo-hero"><p class="eyebrow">ONE COFFEE. TWO PERSPECTIVES.</p><h1>从两个视角，<br>看看一笔咖啡订单。</h1><p>选择用户或商家视角，体验本地购物流程。</p><div class="demo-disclosure">这是同一台电脑上的演示入口，身份由本地演示页面区分，非账号登录。付款与履约均为本地模拟。</div></section>
+      <p id="demo-loading" class="demo-loading" role="status">正在读取本机配置…</p>
+      <section id="api-configuration" class="model-settings" aria-labelledby="api-configuration-heading" hidden>
+        <div class="model-settings-heading"><div><p class="eyebrow">YOUR MODEL. YOUR CHOICE.</p><h2 id="api-configuration-heading" tabindex="-1">连接你的 AI 助手</h2><p>第一次使用时，填写自己的 API。保存后自动进入演示入口，下次启动会沿用你的配置。</p></div><div class="model-settings-heading-actions"><button id="model-back-to-entry" class="model-text-button" type="button" hidden>返回演示入口 ↗</button><span id="model-settings-status" class="model-status" role="status">正在读取配置</span></div></div>
+        <div id="model-first-run" class="model-first-run" hidden><span class="model-first-run-icon" aria-hidden="true">✦</span><div><strong>首次使用，先接上你的模型</strong><p>填写服务地址、模型名称与密钥，保存后即可选择用户演示或商家演示。</p></div><a id="model-first-run-link" href="#model-provider">开始配置 <span aria-hidden="true">↓</span></a></div>
+        <form id="model-settings-form" autocomplete="off">
+          <fieldset id="model-settings-fields" disabled>
+            <legend class="model-sr-only">模型 API 配置</legend>
+            <div class="model-settings-grid">
+              <label for="model-provider">API 服务<select id="model-provider"><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic / Claude</option><option value="gemini">Google / Gemini</option><option value="custom">其他 / 自定义 API</option></select></label>
+              <label for="model-protocol">接口协议<select id="model-protocol" aria-describedby="model-protocol-note"><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic Messages</option><option value="gemini">Google Gemini</option></select></label>
+              <label class="model-field-wide" for="model-base-url">API 服务地址<input id="model-base-url" type="url" maxlength="2048" placeholder="https://api.deepseek.com" required spellcheck="false" aria-describedby="model-base-note"><small id="model-base-note">填写服务的基础地址，不包含 /chat/completions、/messages 等请求路径。第三方服务请按其文档填写。</small></label>
+              <label for="model-name">模型名称<input id="model-name" type="text" maxlength="200" placeholder="deepseek-flash" required spellcheck="false" aria-describedby="model-name-note"><small id="model-name-note">使用服务商提供的模型 ID；示例可以修改。所选模型需要支持工具调用。</small></label>
+              <label for="model-timeout">请求超时（秒）<input id="model-timeout" type="number" min="0.1" max="60" step="0.1" value="30" required aria-describedby="model-timeout-note"><small id="model-timeout-note">0.1–60 秒，通常保留 30 秒即可。</small></label>
+              <label class="model-field-wide" for="model-api-key">API 密钥<div class="model-key-field"><input id="model-api-key" type="password" maxlength="4096" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="粘贴你的 API 密钥" required aria-describedby="model-key-note"><button id="model-key-toggle" class="model-key-toggle" type="button" aria-pressed="false" aria-label="显示 API 密钥">显示</button></div><small id="model-key-note">密钥只提交给本机服务，不写入浏览器存储；保存后输入框会清空。</small></label>
+            </div>
+            <p id="model-protocol-note" class="model-protocol-note">支持 OpenAI 兼容、Anthropic 与 Gemini 三种接口。密钥、地址和模型必须来自同一服务，兼容程度以连接测试为准。</p>
+            <div class="model-settings-actions"><button id="model-save" class="primary" type="submit">保存本机配置 <span aria-hidden="true">↗</span></button><button id="model-test" class="secondary" type="button">测试连接与工具调用</button><button id="model-clear" class="model-text-button" type="button" disabled>清除本机配置</button></div>
+          </fieldset>
+        </form>
+        <div class="model-settings-bottom"><p>配置保存在本机服务的数据目录中。测试会向所填服务发送一条简短请求，可能消耗少量额度；测试成功后仍需点击保存。</p><button id="model-reload" class="model-text-button" type="button">重新读取</button></div>
+        <div id="model-clear-confirmation" class="model-clear-confirmation" hidden><p>清除后，Agent 需要重新填写 API 才能使用。确定清除当前本机配置？</p><div><button id="model-clear-confirm" class="secondary" type="button">确定清除</button><button id="model-clear-cancel" class="model-text-button" type="button">保留配置</button></div></div>
+        <p id="model-settings-feedback" class="model-settings-feedback" role="status" aria-live="polite" hidden></p>
+      </section>
+      <section id="demo-entry-view" aria-labelledby="demo-entry-heading" hidden>
+      <div class="demo-hero"><p class="eyebrow">ONE COFFEE. TWO PERSPECTIVES.</p><h1 id="demo-entry-heading" tabindex="-1">从两个视角，<br>看看一笔咖啡订单。</h1><p>选择用户或商家视角，体验本地购物流程。</p><div class="demo-disclosure">这是同一台电脑上的演示入口，身份由本地演示页面区分，非账号登录。付款与履约均为本地模拟。</div></div>
       <div class="demo-entry-grid">
         <a class="demo-entry-card" id="user-demo-entry" href="/?start=1"><span class="entry-icon" aria-hidden="true"></span><p class="eyebrow">USER DEMO</p><h2>用户演示</h2><p>说说需求、比较候选，核对整单报价。每笔模拟购买由你逐次确认。</p><span class="entry-link">进入用户购物页 <span aria-hidden="true">↗</span></span></a>
         <a class="demo-entry-card" id="merchant-demo-entry" href="/merchant"><span class="entry-icon" aria-hidden="true">▤</span><p class="eyebrow">MERCHANT DEMO · READ ONLY</p><h2>商家演示</h2><p>查看商品、可用与预留库存，以及订单的付款和履约状态。只读展示商家保存的记录。</p><span class="entry-link">进入只读商家看板 <span aria-hidden="true">↗</span></span></a>
       </div>
       <p class="demo-footnote">商家看板需要连接本机商家服务。数据不可用时，页面会显示连接或读取提示。</p>
+      </section>
+      <noscript><p class="model-settings-feedback error">请启用浏览器 JavaScript，以读取本机配置并进入演示。</p></noscript>
     </main>
     <div class="page-footer"><span>OCP CATALOG / LOCAL DEMO</span><span>本机演示 · 模拟付款 · 模拟履约</span></div>
   </div>

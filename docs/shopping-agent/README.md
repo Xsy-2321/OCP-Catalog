@@ -1,6 +1,6 @@
 # 一杯之间：购物应用
 
-项目由用户独立维护。主运行路径为本地 **HTTP**：A 页面/API 通过 OCP 搜索与 Resolve 访问 B Coffee API，在用户明确确认后签发共同 Ed25519 授权。B 使用持久 SQLite 保存库存、购买尝试、模拟支付、订单及幂等结果。付款为本地模拟。Agent 模式已接入 DeepSeek 兼容 API 和真实工具循环，密钥默认留空。
+项目由用户独立维护。主运行路径为本地 **HTTP**：A 页面/API 通过 OCP 搜索与 Resolve 访问 B Coffee API，在用户明确确认后签发共同 Ed25519 授权。B 使用持久 SQLite 保存库存、购买尝试、模拟支付、订单及幂等结果。付款为本地模拟。Agent 模式支持用户在演示入口填写模型 API 配置，首次使用默认为未配置。
 
 ## 一条命令启动
 
@@ -8,13 +8,11 @@
 
 ```powershell
 bun install --frozen-lockfile
-# 第一次配置时复制；已有 .env 就直接编辑，避免覆盖。
-Copy-Item .env.example .env
 bun run shopping:demo:check
 bun run shopping:demo
 ```
 
-打开 http://127.0.0.1:4310。统一启动器运行 A/B，自动生成并保留本地签名密钥，数据默认位于 `.codex-tmp/shopping-demo`。普通重启保持库存、会话与订单；`bun run shopping:demo --new-session` 创建独立排练目录并保留原资料。新目录不能作为旧未知购买失败的证据。停止使用 Ctrl+C。
+打开 http://127.0.0.1:4310/demo，在“模型 API 配置”填写自己的密钥并保存，然后进入用户演示。需要修改端口或数据目录时才复制 `.env.example` 为 `.env`，已有文件保留。统一启动器运行 A/B，自动生成并保留本地签名密钥，数据默认位于 `.codex-tmp/shopping-demo`。普通重启保持库存、会话与订单；`bun run shopping:demo --new-session` 创建独立排练目录并保留原资料。新目录不能作为旧未知购买失败的证据。停止使用 Ctrl+C。
 
 关闭会等待请求和底层会话写入结束，再停止商家并释放目录锁；即使 Agent 已返回超时，也会等待后台取消清理落盘。
 
@@ -34,7 +32,7 @@ bun run shopping:preview
 & '.\.codex-tmp\integration\runtime\1.3.13\bun-windows-x64\bun.exe' --no-env-file scripts/shopping-preview.ts
 ```
 
-此命令由启动器读取已有 `.env`，不会覆盖密钥。恢复时设置 `SHOPPING_PREVIEW_DATA_DIR` 后再次使用相同命令。
+此命令由启动器读取已有 `.env` 的端口和数据目录配置；模型 API 在演示门户填写，旧 `.env` 中的模型密钥不再自动使用。恢复时设置 `SHOPPING_PREVIEW_DATA_DIR` 后再次使用相同命令。
 
 它沿用统一 A/B 启动器，自动选取两个空闲端口，并在 `.codex-tmp/shopping-dual-preview/run-*` 新建这一轮的独立数据目录。终端会给出三个可直接打开的网址：**演示门户、用户演示入口、商家演示入口**。两个页面位于同一网址下，分别是 `/` 与 `/merchant`；后台仍在电脑本机运行。不需要部署服务器，也不会清空或替换原 `.codex-tmp/shopping-demo` 的数据、签名或未决购买记录。
 
@@ -60,24 +58,33 @@ bun run shopping:preview
 
 现有 `bun run shopping:demo` 同样增加 `/demo` 和 `/merchant` 入口，默认仍用 4310/8787 和原数据目录；只有新命令 `shopping:preview` 默认选择新目录及空闲端口。分开启动的 `shopping:start` 没有商家读取能力，页面会隐藏双端导航。
 
-本轮**无需数据库迁移**，继续使用 SQLite schema 3，没有新增表或更改交易字段。商家页只读取现有数据；启动器保留既有旧库升级机制，不能把启动旧库当作纯只读操作。新命令默认创建独立库，验收也只使用独立库。后端沿用已有 `.env` 模型配置，启动不会调用模型；自动验收使用本地协议 fixture，不消耗真实模型额度。
+本轮**无需数据库迁移**，继续使用 SQLite schema 3，没有新增表或更改交易字段。商家页只读取现有数据；启动器保留既有旧库升级机制，不能把启动旧库当作纯只读操作。新命令默认创建独立库，验收也只使用独立库。模型使用演示门户保存的本地配置，启动不会调用模型；自动验收使用本地协议 fixture，不消耗真实模型额度。
 
 `--new-session` 会输出此次数据目录。要继续这一轮排练，设置 `SHOPPING_DEMO_DATA_DIR` 为输出目录，再正常启动；再次使用 `--new-session` 会创建另一个独立目录。
 
 ## 模型密钥配置
 
-根 `.env` 的入口如下，密钥只由后端读取：
+打开 `/demo`。配置卡片和用户 / 商家演示卡片分成两个展示页：本机未配置时先显示配置卡片，保存成功自动切到两个演示入口；已有配置时直接显示演示入口，点击右上角“更改api配置”可返回修改。`/demo#api-configuration` 是直接进入修改页的链接。首次使用显示“待配置”，不会自动使用你原来填写的 `DEEPSEEK_API_KEY` 或 `SHOPPING_LLM_*`。可以选择预设，再按服务商实际资料填写：
 
-```dotenv
-DEEPSEEK_API_KEY=
-SHOPPING_LLM_BASE_URL=https://api.deepseek.com
-SHOPPING_LLM_MODEL=deepseek-flash
-SHOPPING_LLM_TIMEOUT_MS=30000
-```
+| 字段 | 含义 |
+|---|---|
+| 服务预设 / API 类型 | DeepSeek、OpenAI、Anthropic、Gemini，或其他兼容服务；类型决定请求协议 |
+| 接口地址 | 服务商 API 基础地址，例如 `https://api.deepseek.com` 或 `https://api.openai.com/v1` |
+| 模型名称 | 账号可用、支持工具调用的准确模型 ID，可自行修改预设 |
+| API Key | 用户自己的密钥，首次保存必填；修改同一接口时留空可保留已保存密钥 |
+| 超时时间 | 每次调用的上限，默认 30 秒，可填写 0.1–60 秒 |
 
-`deepseek-flash` 对应 DeepSeek V4.1 Flash，依据 [官方发布说明](https://api-docs.deepseek.com/news/news260910/)。调用格式参考 [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/)；使用非思考模式。其他 OpenAI 兼容网关可修改 base URL 和模型名。
+支持 OpenAI 兼容 Chat Completions、Anthropic Messages 和 Gemini generateContent 三种协议。API Key 必须匹配服务商、接口和模型，模型必须支持 function calling；其他专有协议需增加适配器。接口使用 HTTPS，本机协议测试允许 loopback HTTP。DeepSeek 专用的非思考参数只用于其官方接口，不发送给其他兼容服务。
 
-空密钥可使用手动搜索；Agent 明确显示未配置。填入后重启，选择“Agent 规划”。预算是表单硬上限，语言中更低预算可以收紧；语言杯数与表单冲突时要求修改表单。模型只提取需求、搜索和请求报价，不能批准、签名、购买或修改商户。默认每次模型调用30秒，整轮Agent规划包含模型、目录分页和报价的总时限为110秒，最多8个规划工具步骤。超时中止后续搜索与报价，并停用该轮可确认报价；不会中断已经开始的购买或订单恢复。错误、超时或限流不自动重试或回退mock。
+“测试连接”会以当前草稿发出一次小型工具调用，可能消耗少量模型额度，但不保存草稿，不创建购物会话或订单。“保存配置”通过校验后立即生效，无需重启。页面会清空输入框，后端仅返回是否已保存密钥。换接口或 API 类型时需重新填写密钥，避免误发旧服务商密钥。
+
+配置保存在项目的 `.codex-tmp/shopping-model/settings.json`，由本地后端读取，已被 Git 忽略；密钥不保存在浏览器 localStorage、cookie 或 URL 中。该文件含密钥明文，应像 `.env` 一样保管，不分享整个 `.codex-tmp`。演示和新预览共用已保存的配置，重启仍保留。“清除配置”删除已保存的模型配置，Agent 恢复未配置状态，不清除购物记录。分开启动 A 也可通过 `/demo` 设置模型。
+
+多个本地服务实例使用同一配置时，每次读取都以磁盘上的最新内容为准。保存和清除通过 `settings.json.lock` 协调，密钥已清除后，旧页面留空保存不会恢复旧密钥。异常退出留下写入锁时，先核对锁内 PID 并确认原进程已退出，再清理该锁；不能根据锁的时间自动抢占。
+
+从购物表单前往 API 配置时，当前标签页临时保存购物草稿，配置页提供“返回购物”。返回后先恢复服务端购物记录，再恢复匹配的可编辑草稿；未决购买仍保持锁定。草稿只在浏览器 sessionStorage 中短时保留，返回后删除，不包含 API 密钥。Gemini 的 `v1` 和 `v1beta` 地址使用各自兼容的工具定义格式。
+
+未配置时仍可使用手动搜索和商家看板。保存后进入用户页选择“Agent 规划”。预算是表单硬上限，语言中更低预算可以收紧；语言杯数与表单冲突时要求修改表单。模型只提取需求、搜索和请求报价，不能批准、签名、购买或修改商户。默认每次模型调用30秒，整轮Agent规划包含模型、目录分页和报价的总时限为110秒，最多8个规划工具步骤。超时中止后续搜索与报价，并停用该轮可确认报价；不会中断已经开始的购买或订单恢复。错误、超时或限流不自动重试或回退mock。
 
 支持同一商家的混合商品购物篮与配送：最多 10 行需求、合计 1–20 杯。手动模式勾选“一次购买不同商品”，逐行填写关键词和杯数，在每组候选中选择商品后查看整单报价；Agent 模式可描述“一杯拿铁和一杯美式”，总杯数填 2。配送需在表单选择并填写收件人、电话和详细地址；这些表单信息不发送给模型。拿铁和美式的 demo 配送费为整单 5 元，仅收一次；不支持配送的商品不能选入配送订单。
 
@@ -118,7 +125,7 @@ B 按其 README 生成 trusted-keys.json；双方保持 `agent_a_test` / `agent_
 
 ## 使用与恢复
 
-1. 选择手动关键词或 Agent 自然语言，设置各商品杯数和包含全部收费的人民币总预算。Agent 模式需要后端配置模型密钥；支持单商户混合商品、自取及商品声明支持的配送。
+1. 选择手动关键词或 Agent 自然语言，设置各商品杯数和包含全部收费的人民币总预算。Agent 模式先在演示入口填写模型 API；支持单商户混合商品、自取及商品声明支持的配送。
 2. 从目录候选取得最终报价；目录筛选后仍复核币种、库存和整数分金额。
 3. 检查条款，明确点击确认才会签发授权和结账。模型说“已批准”和取消操作都不能购买。
 4. 分开查看付款与履约状态。B 的 pending 显示“待履约”；付款成功不表示咖啡开始制作或已经取餐。
@@ -131,6 +138,10 @@ B 按其 README 生成 trusted-keys.json；双方保持 `agent_a_test` / `agent_
 浏览器使用随机 HttpOnly/SameSite cookie 标识本地用户，保留30天。A 将同一个后端会话身份作为 B caller 和授权 user；这是本地开发身份，不能当作生产登录。清除cookie或换浏览器不能找回原身份。localStorage只作为便捷指针，未决会话由后端查询。
 
 ## 验证
+
+`bun run shopping:settings:browser` 在独立 A/B 服务和本机模型协议样例上验证配置页面的首次引导、连接测试、保存立即生效、重载、清除与手机布局，不读取或调用真实密钥。`node apps/shopping-agent-web/scripts/model-settings-browser-check.mjs` 额外验证换服务重填密钥、失败草稿不保存、跨标签页刷新和浏览器存储隔离。
+
+`bun run shopping:configuration:browser` 验证从购物表单前往配置再返回时的草稿恢复，以及未付报价、未知购买、原会话恢复失败和禁用 sessionStorage 的边界；全部使用本地固定样例。
 
 `bun run test:all` 单次执行完整源码套件；根 `bun run test` 也包含shopping-e2e，不应累加两个重复入口的用例数。GitHub Actions已有构建、类型、lint、完整测试、文档和三语言示例门禁。
 

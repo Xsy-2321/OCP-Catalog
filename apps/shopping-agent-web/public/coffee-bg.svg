@@ -16,22 +16,6 @@
       <stop offset="100%" stop-color="#18110d" stop-opacity="0"/>
     </radialGradient>
 
-    <!-- Warm counter reflection / wood bar highlight -->
-    <linearGradient id="counter-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#4a3525" stop-opacity="0.6"/>
-      <stop offset="8%" stop-color="#2d1f16" stop-opacity="0.85"/>
-      <stop offset="40%" stop-color="#1c130d" stop-opacity="0.95"/>
-      <stop offset="100%" stop-color="#0d0906" stop-opacity="1"/>
-    </linearGradient>
-
-    <!-- Bar rim light -->
-    <linearGradient id="bar-rim" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#c9955c" stop-opacity="0.3"/>
-      <stop offset="25%" stop-color="#dfa868" stop-opacity="0.5"/>
-      <stop offset="55%" stop-color="#8c5d33" stop-opacity="0.2"/>
-      <stop offset="100%" stop-color="#2d1f16" stop-opacity="0.05"/>
-    </linearGradient>
-
     <!-- Secondary warm atmospheric bokeh -->
     <radialGradient id="bokeh-1" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#e8be88" stop-opacity="0.22"/>
@@ -65,11 +49,6 @@
     <circle cx="1600" cy="220" r="300" fill="url(#bokeh-2)" opacity="0.6"/>
     <circle cx="1320" cy="520" r="220" fill="url(#bokeh-1)" opacity="0.4"/>
   </g>
-
-  <!-- Cafe Counter Silhouette (warm dark wood perspective) -->
-  <path d="M 0,720 L 1920,660 L 1920,1080 L 0,1080 Z" fill="url(#counter-gradient)"/>
-  <!-- Polished wood rim highlight line -->
-  <path d="M 0,720 L 1920,660" stroke="url(#bar-rim)" stroke-width="2.5" opacity="0.85"/>
 
   <!-- Warm counter reflection glow -->
   <ellipse cx="480" cy="740" rx="420" ry="60" fill="#9e6939" opacity="0.15" filter="url(#medium-blur)"/>
