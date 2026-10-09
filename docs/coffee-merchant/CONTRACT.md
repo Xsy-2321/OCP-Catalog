@@ -1,10 +1,11 @@
 # C0 契约：购物交易接口（本地整合候选）
 
-- **契约版本**：`SHOPPING_CONTRACT_VERSION = 0.2.0`
+- **契约版本**：`SHOPPING_CONTRACT_VERSION = 1.0.0`
 - **冻结日期**：2026-10-07
 - **维护者**：项目维护者（独立维护 A/B 两侧）
 - **整合澄清日期**：2026-10-07；新增整篮报价和配送信息，兼容既有单商品自取请求及已保存的报价、订单
-- **当前状态**：用户独立维护的本地候选，等待检查；暂未合入 `main`、未推送
+- **版本更正日期**：2026-10-09；0.2.0 只升了次版本号，但该次改动把订单支付字段由 `payment_status` 改名为 `payment`，而 `orderSchema` 在 0.1.0 就已经是线上响应 schema ⇒ 按 §14 规则 2 属破坏性变更，故更正为 `1.0.0`。无新增代码改动
+- **当前状态**：已由维护者合入 `main`（`8527358`，PR #1）；本文档与 `packages/shopping-contracts/` 仍为契约描述
 - **落地代码**：`packages/shopping-contracts/`、`fixtures/shopping/`
 
 > ⚠️ **本文件描述的一切都是 demo 应用扩展，不是 OCP Catalog 标准的一部分。**
@@ -41,6 +42,24 @@
 ---
 
 ## 1. 交易流程
+
+### 1.0.0：订单支付字段改名（破坏性，版本号更正）
+
+`orderSchema` 的支付字段由 `payment_status` 改名为 `payment`，形状与值域不变
+（均为对象 `{ status, updated_at }`）。**这不是新改动，而是一次版本号更正**：
+改名发生在 0.2.0 的整合里，当时只升了次版本号；但 `orderSchema` 在 0.1.0 就已经是
+线上响应 schema —— `src/http.ts` 里 `orderResponseSchema = orderSchema`，且
+`orderSchema` 同时是 Checkout 响应里的 `order` 字段 —— 因此改它的名字正好落在
+§14 规则 2 的"改语义或删字段"上。0.2.0 这个次版本号不足以承载破坏性改名，本条目
+按该规则更正为主版本号，并由维护者确认 A/B 影响。
+
+**A/B 影响**：改名所需的代码同步已在 0.2.0 内完成，**本次不需要改动任何代码**。
+两侧各读各自的名字：领域层（`merchant-core`）读对象 `payment`；视图层
+（`views.ts` 的 `runtimeOrderViewSchema`）另有一个**扁平**的 `payment_status`
+枚举，供 A 侧与浏览器渲染使用。两者名字相似、形状不同，不要混用。
+
+本包的 npm `version` 字段与这里的 wire 契约版本相互独立，由仓库维护者另行维护；
+本次只更正 wire 契约版本。
 
 ### 0.2.0：整篮与配送
 

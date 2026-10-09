@@ -13,8 +13,11 @@
  *
  * Bump the minor version for additive changes, the major version for any
  * breaking change. Both sides must agree on this value before integrating.
+ *
+ * This is the **wire contract** version. It is independent of the `version`
+ * field in this package's package.json, which tracks npm packaging instead.
  */
-export const SHOPPING_CONTRACT_VERSION = '0.2.0';
+export const SHOPPING_CONTRACT_VERSION = '1.0.0';
 
 /** Domain separator mixed into the canonical terms serialization. */
 export const TERMS_DOMAIN = 'ocp.demo.terms.v1';

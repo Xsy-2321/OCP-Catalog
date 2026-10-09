@@ -70,7 +70,7 @@
 
 ### Order / Event：订单与办事记录
 
-提供 attempt 与 order 查询，区分 payment_status 和 fulfillment_status。成功订单只能由服务端验证后的支付/交易状态产生。
+提供 attempt 与 order 查询，区分 `payment` 和 `fulfillment_status`。成功订单只能由服务端验证后的支付/交易状态产生。
 
 保存商品和报价快照、关键交易事件、更新时间。事件采用追加记录并脱敏；第一版只能称应用过程记录，未做防篡改验证时不得宣传不可篡改账本。
 

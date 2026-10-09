@@ -4,7 +4,7 @@
  * Two state machines, kept apart on purpose (contract §5 D5):
  *
  *   attempt:  processing -> confirmed | failed          (and never back)
- *   order:    payment_status  ⊥  fulfillment_status
+ *   order:    payment  ⊥  fulfillment_status
  *
  * The separation is not tidiness. A single order status invites one specific
  * mistake — reporting "completed" the moment the card clears, so the customer

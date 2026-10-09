@@ -125,7 +125,7 @@ Quote/order/attempt 查询要求明确的调用者身份并检查资源归属，
 - `Quote`：quote_id、merchant_id、items、费用明细、currency、total_minor、expires_at、terms_hash。
 - `AuthorizationProof`：绑定用户、merchant_id、quote_id、terms_hash、currency、max_total_minor、purchase_attempt_id、有效期。
 - `PurchaseAttempt`：attempt ID、处理状态、关联 order ID、可公开的错误。
-- `Order`：order_id、attempt ID、商品快照、金额、payment_status、fulfillment_status、updated_at。
+- `Order`：order_id、attempt ID、商品快照、金额、`payment`（`{ status, updated_at }`）、`fulfillment_status`、updated_at。
 - `PurchaseEvent`：事件 ID、业务对象 ID、时间、类型、脱敏内容。
 
 报价包含全部费用。报价不锁库存；Checkout 再核实。价格、商品或履约条件改变时返回需要重新报价，旧授权不能用于新条款。
