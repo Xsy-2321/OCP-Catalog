@@ -97,8 +97,12 @@ try {
   'The first real mode click after keyboard/page activation is not swallowed by a background focus refresh');
   assert(await page.locator('#search-button').isDisabled(), 'Unconfigured Agent cannot silently fall back to a mock planner');
   const unconfiguredNote = await page.locator('#model-note').textContent();
-  assert(unconfiguredNote.length > 0 && !/API Key|\.env|DeepSeek|模型名/i.test(unconfiguredNote),
-    'Unavailable Agent guidance stays in customer language without server setup details');
+  assert(unconfiguredNote.includes('尚未配置') && unconfiguredNote.includes('API') && unconfiguredNote.includes('关键词检索')
+    && !/\.env|DEEPSEEK_API_KEY|SHOPPING_LLM_|重启|后端/i.test(unconfiguredNote),
+    'Unconfigured Agent explains API setup and keyword search without requiring server configuration');
+  const configurationLink = page.locator('#shopping-api-configuration');
+  assert(await configurationLink.isVisible() && await configurationLink.getAttribute('href') === '/demo#api-configuration',
+    'Unconfigured Agent exposes the direct in-app API configuration link');
   await page.locator('[name="flow-mode"][value="manual"]').check();
   await page.locator('#query').fill('美式'); await page.locator('#budget').fill('100.00'); await page.locator('#quantity').fill('2');
   await ready(page);
