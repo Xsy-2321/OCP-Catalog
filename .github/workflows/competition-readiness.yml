@@ -19,6 +19,8 @@ jobs:
     env:
       CODEX_HOME: ${{ runner.temp }}/ocp-test-codex
       CLAUDE_CONFIG_DIR: ${{ runner.temp }}/ocp-test-claude
+      DEEPSEEK_API_KEY: ''
+      SHOPPING_LLM_API_KEY: ''
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -54,14 +56,8 @@ jobs:
       - run: bun run shopping:basket:browser
       - run: bun run shopping:expiry:browser
       - run: bun run shopping:merchant:browser
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: browser-evidence-${{ matrix.os }}
-          path: |
-            .codex-tmp/**/*.png
-            .codex-tmp/**/browser-*.json
-            .codex-tmp/site-browser-recovery/report.json
-            .codex-tmp/shopping-expiry-check/expiry-report.json
-            .codex-tmp/engineering-inputs/**/report.json
-          if-no-files-found: ignore
+      # These checks use synthetic fixtures and isolated local services/data.
+      # Generated screenshots and reports remain on the runner; no artifact upload.
+      - run: bun run shopping:portal:browser
+      - run: bun run shopping:merchant:presentation:browser
+      - run: bun run shopping:presets:browser
