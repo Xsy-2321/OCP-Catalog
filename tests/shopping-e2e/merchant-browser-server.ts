@@ -57,7 +57,7 @@ const control = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request)
 await writeFile(resolve(directory, 'run-info.json'), JSON.stringify({ directory, ...ports,
   portal: demo.demoPortalUrl, user: demo.userDemoUrl, merchant: demo.merchantDemoUrl,
   restart_mode: 'new_process',
-  model: 'disabled', payment: 'local_simulated' }, null, 2));
+  model: 'local dummy configuration; model never called', payment: 'local_simulated' }, null, 2));
 console.log(JSON.stringify({ directory, user: demo.userDemoUrl, merchant: demo.merchantDemoUrl }));
 try {
   const browserEnv: Record<string, string | undefined> = { ...process.env, SHOPPING_PREVIEW_URL: demo.shoppingOrigin, SHOPPING_BROWSER_OUTPUT: directory,

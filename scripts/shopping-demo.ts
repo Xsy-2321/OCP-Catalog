@@ -3,10 +3,11 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject 
 import { lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseEnv } from 'node:util';
-import { createConfiguredShoppingModel, createHttpRuntime } from '../packages/agent-runtime/src';
+import { createHttpRuntime, type ShoppingModelClient } from '../packages/agent-runtime/src';
 import { createMerchantContext, createMerchantDemoReader, loadConfig } from '../packages/merchant-core/src';
 import { acquireDataLock, createHandler } from '../apps/shopping-agent-api/src/server';
 import { startCoffeeMerchantServer } from '../apps/coffee-merchant-api/src/server';
+import { createLocalModelSettings } from '../apps/shopping-agent-api/src/model-settings';
 
 const PROJECT_ROOT = resolve(import.meta.dir, '..');
 const SCRATCH_ROOT = join(PROJECT_ROOT, '.codex-tmp');
@@ -22,6 +23,10 @@ export interface ShoppingDemoOptions {
   shoppingPort?: number;
   merchantPort?: number;
   env?: Record<string, string | undefined>;
+  /** Isolated configuration location for programmatic previews and tests. */
+  modelSettingsPath?: string;
+  /** Explicit protocol fixture injection; CLI never reads a model key from .env. */
+  model?: ShoppingModelClient;
 }
 
 export interface ShoppingDemo {
@@ -106,8 +111,10 @@ export async function startShoppingDemo(options: ShoppingDemoOptions = {}): Prom
   const shoppingPort = port(options.shoppingPort, env.SHOPPING_PORT, 4310, 'SHOPPING_PORT');
   const merchantPort = port(options.merchantPort, env.MERCHANT_PORT, 8787, 'MERCHANT_PORT');
   if (shoppingPort !== 0 && shoppingPort === merchantPort) throw new Error('SHOPPING_PORT 与 MERCHANT_PORT 必须不同。');
-  const model = createConfiguredShoppingModel(env); // Configuration only: no model request at startup.
   const directory = await demoDirectory(options.dataDir ?? env.SHOPPING_DEMO_DATA_DIR ?? '.codex-tmp/shopping-demo', options.newSession ?? false);
+  const modelSettings = await createLocalModelSettings(options.modelSettingsPath ?? (options.env
+    ? join(directory, 'model-settings.json') : join(SCRATCH_ROOT, 'shopping-model', 'settings.json')));
+  const model = modelSettings.getModel() ?? options.model; // No provider request at startup.
   const release = await acquireDataLock(directory);
   let merchant: ReturnType<typeof startCoffeeMerchantServer> | undefined;
   let api: ReturnType<typeof Bun.serve> | undefined;
@@ -176,7 +183,8 @@ export async function startShoppingDemo(options: ShoppingDemoOptions = {}): Prom
         },
       });
       shoppingOrigin = `http://${HOST}:${api.port}`;
-      handle = createHandler(coordinator, { allowedHost: new URL(shoppingOrigin).host, model,
+      handle = createHandler(coordinator, { allowedHost: new URL(shoppingOrigin).host, model: options.model,
+        ...(options.model ? {} : { modelSettings }),
         merchantDemo: createMerchantDemoReader(merchant!.ctx) });
     } else await stop();
     return { mode: options.checkOnly ? 'check' : 'running', directory, shoppingOrigin,
@@ -201,7 +209,8 @@ async function main() {
   if (demo.mode === 'running') {
     console.log(`演示门户：${demo.demoPortalUrl}\n用户演示入口：${demo.userDemoUrl}\n商家演示入口：${demo.merchantDemoUrl}`);
   }
-  console.log(`模型：${demo.modelName ?? '未配置，可手动搜索'}（仅验证配置，尚未调用模型）`);
+  console.log(`模型：${demo.modelName ?? '未配置，请在演示入口填写 API；也可手动搜索'}（启动不调用模型）`);
+  console.log(`API 配置：${demo.demoPortalUrl}#api-configuration（保存后立即生效，下次启动沿用）`);
   console.log('身份仅为本机演示，非正式登录；商家页面只读。支付和履约为本地模拟，签名密钥和历史数据保留在上述目录。');
   if (demo.mode === 'check') return;
   let closing = false;

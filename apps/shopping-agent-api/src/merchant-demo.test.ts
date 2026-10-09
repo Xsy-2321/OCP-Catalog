@@ -148,7 +148,7 @@ describe('merchant demo role and read routing', () => {
 });
 
 describe('optional merchant capability in the original shopping API', () => {
-  test.each(['/demo', '/demo.html', '/merchant', '/merchant.html', '/merchant.js', '/merchant.css', '/api/merchant-demo/overview'])
+  test.each(['/merchant', '/merchant.html', '/merchant.js', '/api/merchant-demo/overview'])
     ('a standalone handler disables %s without issuing any cookie', async path => {
       const response = await createHandler(coordinator())(request(path));
       expect(response.status).toBe(404); expect(response.headers.get('set-cookie')).toBeNull(); expect(calls).toEqual([]);
