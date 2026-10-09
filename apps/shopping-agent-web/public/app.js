@@ -218,7 +218,12 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
     $('demo-navigation').hidden = state.uiStatus.connectionFailed || state.configuration?.merchant_demo_available !== true;
     const health = state.configuration?.merchant_health;
     const offline = state.uiStatus.connectionFailed || health?.status === 'offline';
+    const connected = !state.uiStatus.connectionFailed && health?.status === 'online';
     $('connection-badge').classList.toggle('offline', offline);
+    $('store-connection-badge').classList.toggle('status-pill-live', connected);
+    $('store-connection-label').textContent = state.uiStatus.connectionFailed ? '门店连接待检查'
+      : health?.status === 'offline' ? '当前门店暂不可达'
+      : connected ? '当前门店已连接' : health?.status === 'mock' ? '固定门店样例' : '正在检查门店连接';
     $('mode-label').textContent = state.uiStatus.connectionFailed ? '连接状态待检查'
       : state.configuration?.mode === 'mock' ? '本地演示'
       : health?.status === 'online' ? '商家在线' : health?.status === 'offline' ? '商家暂不可达' : '正在检查连接';
@@ -276,6 +281,7 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
     const view = deriveViewModel(state, Date.now());
     const { phase, mixed, delivery, groups, grouped } = view;
     ['query', 'agent-message', 'budget', 'quantity', 'mixed-basket', 'fulfillment', 'delivery-recipient', 'delivery-phone', 'delivery-address'].forEach(id => { getControl(id).disabled = !view.actions.edit; });
+    document.querySelectorAll('.prompt-chip').forEach(element => { if (element instanceof HTMLButtonElement) element.disabled = !view.actions.edit; });
     $('single-query').hidden = mixed; $('basket-editor').hidden = !mixed;
     getInput('quantity').readOnly = mixed;
     for (const element of $('basket-lines').querySelectorAll('input,button')) {
@@ -303,7 +309,7 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
       for (const candidate of group.candidates) {
       const selected = grouped ? state.uiStatus.basketChoices.get(index) === candidate.entry_id : state.serverSession?.selected?.entry_id === candidate.entry_id;
       const card = node('article', undefined, `coffee-card${selected ? ' selected' : ''}`);
-      card.append(node('span', '☕', 'coffee-icon'), node('h3', candidate.title), node('p', candidate.description));
+      card.append(node('span', '', 'coffee-icon'), node('h3', candidate.title), node('p', candidate.description));
       const bottom = node('div', undefined, 'card-bottom');
       const price = node('span', money(candidate.search_price_minor), 'price'); price.append(node('small', '/ 杯 · 目录价'));
       const button = node('button', grouped ? selected ? '已选入购物篮' : '选入购物篮' : '查看最终报价', 'secondary'); button.type = 'button';
@@ -442,14 +448,15 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
     const quantity = draftQuantity(state.draft);
     if (minor <= 0 || minor > 1000000 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 20) { notify('请输入大于零且不超过10000元的预算，以及 1–20 杯的整数数量。', 'error'); return; }
     const message = state.draft.message;
+    const mode = state.draft.mode;
     const query = state.draft.query;
-    const items = mixedManual() ? state.draft.items : undefined;
+    const items = mixedManual() ? state.draft.items.map(item => ({ ...item })) : undefined;
     if (items && (items.length < 2 || items.length > 10 || items.some(item => !item.query
       || !Number.isSafeInteger(item.quantity) || item.quantity < 1))) {
       notify('请为购物篮的每一种商品填写关键词和正整数杯数。', 'error'); return;
     }
     const fulfillment = state.draft.fulfillment;
-    const delivery = fulfillment === 'delivery' ? state.draft.delivery : undefined;
+    const delivery = fulfillment === 'delivery' ? { ...state.draft.delivery } : undefined;
     if (delivery && (!delivery.recipient || !/^\+?[0-9]{6,15}$/.test(delivery.phone.replace(/[ -]/g, '')) || delivery.address.length < 5)) {
       notify('请填写收件人、有效联系电话和至少 5 个字的详细配送地址。', 'error'); return;
     }
@@ -459,7 +466,7 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
       await syncPending();
       if (locked()) throw new Error('请先查询原购买结果，再提交新的需求。');
       if (!state.configuration) throw new Error('商家配置尚未加载，请重新检查连接。');
-      if (state.draft.mode === 'agent') {
+      if (mode === 'agent') {
         if (!llmReady()) throw new Error('Agent 暂不可用，请切换为关键词检索。');
         const result = await request('/api/agent/run', parseAgentRunView, { message, max_total_minor: minor, quantity, fulfillment, ...(delivery ? { delivery } : {}) }, 120_000);
         adopt(result.session, true); state.plannerResult = result;
@@ -501,6 +508,27 @@ import { createPageState, deriveViewModel, draftFromSession, draftQuantity } fro
   getControl('recover-button').addEventListener('click', () => { void action('recover'); });
   getControl('pending-check').addEventListener('click', () => { void refreshStatus(true); });
   getControl('connection-check').addEventListener('click', () => { void refreshStatus(true); });
+  document.querySelectorAll('.prompt-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      if (!deriveViewModel(state, Date.now()).actions.edit) return;
+      const preset = chip.getAttribute('data-preset');
+      if (preset === 'latte') {
+        state.draft = { ...state.draft, mode: 'manual', query: '拿铁', budget: '28.00', fulfillment: 'pickup' };
+      } else if (preset === 'agent-sweet') {
+        state.draft = { ...state.draft, mode: 'agent', message: '想喝奶香一点，不要太苦，请推荐合适的一杯。', budget: '30.00' };
+      } else if (preset === 'americano-budget') {
+        state.draft = { ...state.draft, mode: 'manual', query: '美式', budget: '30.00', fulfillment: 'pickup' };
+      } else return;
+      state.draft.mixed = false;
+      state.draft.items = [];
+      state.draft.quantity = 1;
+      state.draft.changed = true;
+      state.plannerResult = null;
+      renderDraftForm(state.draft);
+      showStep(0);
+      render();
+    });
+  });
   /** @param {number} target */
   function goBack(target) {
     if ((state.uiStatus.busy && !state.uiStatus.backgroundChecking) || !Number.isInteger(target) || target < 0 || target >= shownStep) return;

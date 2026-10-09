@@ -46,6 +46,7 @@
     "security:check": "bun run runtime:check && bun scripts/check-dependency-audit.ts",
     "shopping:basket:browser": "bun run runtime:check && bun run shopping:ui:prepare && bun tests/shopping-e2e/browser-http-server.ts --basket-check",
     "shopping:expiry:browser": "bun run runtime:check && bun run shopping:ui:prepare && node apps/shopping-agent-web/scripts/expiry-browser-check.mjs",
+    "shopping:presets:browser": "bun run runtime:check && bun run shopping:ui:prepare && node apps/shopping-agent-web/scripts/presets-browser-check.mjs",
     "shopping:ui:prepare": "bun run runtime:check && bun run --cwd apps/shopping-agent-web contracts:build",
     "site:browser": "bun run runtime:check && bun apps/ocp-site-web/scripts/browser-recovery-check.mjs"
   },

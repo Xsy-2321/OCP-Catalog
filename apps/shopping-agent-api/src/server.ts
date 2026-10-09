@@ -136,6 +136,7 @@ export function createHandler(coordinator: ShoppingCoordinator, options: {
         '/dom.js': { file: 'dom.js', type: 'text/javascript; charset=utf-8' },
         '/api-client.js': { file: 'api-client.js', type: 'text/javascript; charset=utf-8' },
         '/styles.css': { file: 'styles.css', type: 'text/css; charset=utf-8' },
+        '/coffee-bg.svg': { file: 'coffee-bg.svg', type: 'image/svg+xml; charset=utf-8' },
       };
       const asset = staticFiles[url.pathname];
       if (!asset || request.method !== 'GET') throw new FlowError('not_found', '页面不存在。', 404);
