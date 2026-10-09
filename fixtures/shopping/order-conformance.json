@@ -1,0 +1,1222 @@
+{
+  "description": "Shared order snapshot semantics for consumer reads and merchant list/detail reads; identity/scope are boundary-specific.",
+  "cases": [
+    {
+      "name": "valid multi-item pickup",
+      "valid": true,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "valid independent pending payment and ready fulfillment",
+      "valid": true,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "ready",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "valid free order",
+      "valid": true,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 0,
+            "line_total_minor": 0
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 0,
+            "line_total_minor": 0
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 0,
+        "total_minor": 0,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "185c4b42a8b4fe069c06cf986fd7fe6384a0343bfa5b9972e5f0c556f1a62aa0"
+      }
+    },
+    {
+      "name": "valid discount",
+      "valid": true,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [
+          {
+            "code": "discount",
+            "label": "优惠",
+            "amount_minor": -500
+          }
+        ],
+        "subtotal_minor": 6800,
+        "total_minor": 6300,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "62d7853fbae6a6e040eebd7307f5c52000bfccaa6f0e1b2b2e1af18ba7ebf7c8"
+      }
+    },
+    {
+      "name": "valid delivery and fee",
+      "valid": true,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [
+          {
+            "code": "delivery",
+            "label": "配送",
+            "amount_minor": 480
+          }
+        ],
+        "subtotal_minor": 6800,
+        "total_minor": 7280,
+        "fulfillment": {
+          "method": "delivery",
+          "delivery": {
+            "recipient": "测试收件人",
+            "phone": "13800138000",
+            "address": "杭州市测试地址1号"
+          }
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "c6a3e160a4e87d02183533ddcf1b12f3416ecc81a77e96adfec32ddf9fe972c6"
+      }
+    },
+    {
+      "name": "valid reordered display snapshot",
+      "valid": true,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_americano",
+            "title": "展示名称已修正",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          },
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "bad line total",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 4999
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "bad subtotal",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6799,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "bad total with recomputed hash",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6801,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "762e980538b6e4ea8bf3de08741d8243b4efd1654584ab3cdd171e59d86faaff"
+      }
+    },
+    {
+      "name": "bad fee omitted from total with recomputed hash",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [
+          {
+            "code": "delivery",
+            "label": "配送",
+            "amount_minor": 480
+          }
+        ],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "56a3773f8a3b64f94ffeaa100355e01b30dc23566b43416a2199506dba976d9e"
+      }
+    },
+    {
+      "name": "bad hash",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "changed signed item",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_changed",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "changed signed fulfillment",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "delivery"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "duplicate item identities with recomputed hash",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_latte",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "e99ca9c3ea976e56fc8868e1bfc13aca71bf02db95b207354ee727231c53e746"
+      }
+    },
+    {
+      "name": "unsafe product",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 9007199254740991,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "unsafe subtotal sum",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 1,
+            "unit_minor": 9007199254740991,
+            "line_total_minor": 9007199254740991
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 9007199254740991,
+        "total_minor": 9007199254740991,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "unsafe fee sum",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [
+          {
+            "code": "large_fee_a",
+            "label": "费用A",
+            "amount_minor": 9007199254740991
+          },
+          {
+            "code": "large_fee_b",
+            "label": "费用B",
+            "amount_minor": 1
+          }
+        ],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "unsafe fee intermediate before discount",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [
+          {
+            "code": "large_fee_a",
+            "label": "费用A",
+            "amount_minor": 9007199254740991
+          },
+          {
+            "code": "large_fee_b",
+            "label": "费用B",
+            "amount_minor": 2
+          },
+          {
+            "code": "discount",
+            "label": "优惠",
+            "amount_minor": -9007199254740991
+          }
+        ],
+        "subtotal_minor": 6800,
+        "total_minor": 6802,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "15677561f651acab8481c06856fbc80b60ffea3361ea9dccf6a9112c3e9cadd2"
+      }
+    },
+    {
+      "name": "unsafe total sum",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [
+          {
+            "code": "large_fee",
+            "label": "费用",
+            "amount_minor": 9007199254740991
+          }
+        ],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "timestamp before creation: updated_at",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:00:00.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "timestamp before creation: payment",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:00:00.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "timestamp before creation: fulfillment_status",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:00:00.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "invalid empty items",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "invalid extra wire field",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50",
+        "payment_reference": "not_a_real_payment_handle"
+      }
+    },
+    {
+      "name": "invalid fractional amount",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500.5,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup"
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    },
+    {
+      "name": "invalid pickup with delivery details",
+      "valid": false,
+      "order": {
+        "order_id": "ord_semantic_matrix",
+        "merchant_id": "merchant_coffee_demo",
+        "catalog_id": "catalog_coffee_demo",
+        "purchase_attempt_id": "att_semantic_matrix",
+        "quote_id": "quote_semantic_matrix",
+        "currency": "CNY",
+        "items": [
+          {
+            "entry_id": "entry_latte",
+            "title": "拿铁",
+            "quantity": 2,
+            "unit_minor": 2500,
+            "line_total_minor": 5000
+          },
+          {
+            "entry_id": "entry_americano",
+            "title": "美式",
+            "quantity": 1,
+            "unit_minor": 1800,
+            "line_total_minor": 1800
+          }
+        ],
+        "fees": [],
+        "subtotal_minor": 6800,
+        "total_minor": 6800,
+        "fulfillment": {
+          "method": "pickup",
+          "delivery": {
+            "recipient": "测试收件人",
+            "phone": "13800138000",
+            "address": "杭州市测试地址1号"
+          }
+        },
+        "payment": {
+          "status": "paid",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "fulfillment_status": {
+          "status": "pending",
+          "updated_at": "2026-10-07T10:05:04.000Z"
+        },
+        "created_at": "2026-10-07T10:05:04.000Z",
+        "updated_at": "2026-10-07T10:05:04.000Z",
+        "terms_hash": "5c0f7764863a8e08f6035b0cde4149fb7dd51f14fa7b1562387600dd65aa3e50"
+      }
+    }
+  ]
+}

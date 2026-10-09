@@ -107,11 +107,11 @@ export function DirectoryExplorer({ showHeader = true }: Props) {
                 </>
               )}
             </div>
-            <div className="hidden items-center gap-2 text-xs text-[var(--text-faint)] sm:flex">
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${snapshot.isLoading ? 'animate-spin text-[var(--ocp-cyan)]' : ''}`}
-              />
-              <span className="font-mono tabular-nums">
+            <div className="flex items-center gap-2 text-xs text-[var(--text-faint)]">
+              <button type="button" onClick={snapshot.refresh} disabled={snapshot.isLoading} aria-label={locale === 'zh' ? '刷新目录' : 'Refresh directory'}>
+                <RefreshCw className={`h-3.5 w-3.5 ${snapshot.isLoading ? 'animate-spin text-[var(--ocp-cyan)]' : ''}`} />
+              </button>
+              <span className="hidden font-mono tabular-nums sm:inline">
                 {snapshot.lastUpdated
                   ? new Date(snapshot.lastUpdated).toLocaleTimeString(undefined, {
                       hour: '2-digit',
@@ -172,7 +172,15 @@ export function DirectoryExplorer({ showHeader = true }: Props) {
             locale={locale}
           />
 
-          {allRegistriesUnreachable ? (
+          {snapshot.registries.some((registry) => registry.status === 'unreachable') && !allRegistriesUnreachable && (
+            <p role="status" className="mt-4 text-sm text-[var(--ocp-vermilion)]">
+              {locale === 'zh' ? '部分注册节点暂不可用，当前列表仅包含成功返回的目录。' : 'Some registries are unavailable. This list includes only successful responses.'}
+            </p>
+          )}
+
+          {snapshot.isLoading && snapshot.catalogs.length === 0 ? (
+            <p role="status" className="mt-6 text-sm text-[var(--text-muted)]">{locale === 'zh' ? '正在查询目录…' : 'Loading catalogs…'}</p>
+          ) : allRegistriesUnreachable ? (
             <div className="mt-6">
               <EmptyState locale={locale} kind="all-offline" />
             </div>
@@ -221,8 +229,8 @@ function EmptyState({
       zh: '尚未配置注册节点。请在 src/content/directory/registries.ts 添加条目。',
     },
     'all-offline': {
-      en: 'All configured registration nodes are unreachable. Verify their endpoints or CORS configuration.',
-      zh: '所有已配置的注册节点都无法访问。请检查 endpoint 地址或 CORS 配置。',
+      en: 'Catalog discovery is temporarily unavailable. Retry using Refresh directory above.',
+      zh: '目录发现暂不可用。请使用上方“刷新目录”按钮重试。',
     },
     'no-catalogs': {
       en: 'No catalogs have been indexed by the reachable registries yet.',

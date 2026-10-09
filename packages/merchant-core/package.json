@@ -1,0 +1,40 @@
+{
+  "name": "@ocp-catalog/merchant-core",
+  "version": "0.1.0",
+  "description": "Local demo coffee merchant: catalog, quotes, authorization verification, idempotent checkout, mock payment, orders. NOT part of the OCP Catalog standard.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Open-Commerce-Protocol/OCP-Catalog.git",
+    "directory": "packages/merchant-core"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "bun ../../scripts/build-protocol-package.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test --pass-with-no-tests"
+  },
+  "dependencies": {
+    "@ocp-catalog/ocp-schema": "workspace:*",
+    "@ocp-catalog/shopping-contracts": "workspace:*",
+    "zod": "^4.1.12"
+  }
+}

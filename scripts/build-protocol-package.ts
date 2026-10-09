@@ -43,6 +43,13 @@ await run([
   'external',
 ]);
 
+// Only packages that publish an explicit browser entry get this separate bundle.
+// The browser target rejects accidental Node built-in imports at build time.
+if (await Bun.file(path.join(pkgRoot, 'src', 'browser.ts')).exists()) {
+  await run([process.execPath, 'build', path.join(pkgRoot, 'src', 'browser.ts'),
+    '--outdir', 'dist', '--target', 'browser', '--format', 'esm', '--packages', 'external']);
+}
+
 // Type declarations. Uses the package tsconfig (which extends the repo base)
 // and overrides emit settings on the CLI.
 await run([

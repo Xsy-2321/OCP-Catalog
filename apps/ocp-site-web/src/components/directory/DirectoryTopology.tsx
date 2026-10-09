@@ -99,15 +99,15 @@ export function DirectoryTopology({ snapshot, locale }: Props) {
 
         <dl className="grid grid-cols-2 gap-2 text-right sm:grid-cols-4">
           <Stat label={locale === 'zh' ? '注册节点' : 'Registries'} value={`${stats.registriesLive}/${stats.registriesTotal}`} />
-          <Stat label={locale === 'zh' ? 'Catalogs' : 'Catalogs'} value={String(stats.catalogsTotal)} />
+          <Stat label={locale === 'zh' ? 'Catalogs' : 'Catalogs'} value={stats.registriesLive > 0 ? String(stats.catalogsTotal) : '—'} />
           <Stat
             label={locale === 'zh' ? '已验证' : 'Verified'}
-            value={`${Math.round(stats.verifiedRatio * 100)}%`}
+            value={stats.registriesLive > 0 ? `${Math.round(stats.verifiedRatio * 100)}%` : '—'}
             tone="cyan"
           />
           <Stat
             label={locale === 'zh' ? '健康' : 'Healthy'}
-            value={`${Math.round(stats.healthyRatio * 100)}%`}
+            value={stats.registriesLive > 0 ? `${Math.round(stats.healthyRatio * 100)}%` : '—'}
             tone="green"
           />
         </dl>

@@ -1,0 +1,16 @@
+{
+  "_headers": {
+    "idempotency-key": "idem_fixture_demo_0002",
+    "x-dev-caller-id": "user_demo_1"
+  },
+  "_body": {
+    "purchase_attempt_id": "att_fixture_0007",
+    "quote_id": "quote_fixture_latte_pickup",
+    "terms_hash": "23beda05df672728dafff2f8a5246634b406355344d87b5294275c7c938faf12",
+    "approved": true
+  },
+  "_expected_error": {
+    "code": "invalid_request",
+    "note": "`approved: true` is not authorization. The request must carry a proof."
+  }
+}

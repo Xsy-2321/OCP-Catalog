@@ -17,7 +17,9 @@ after starting the server to check them.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 CATALOG_ID = os.environ.get("CATALOG_ID", "cat_example_python")
 CATALOG_NAME = os.environ.get("CATALOG_NAME", "Example Python Catalog")
 PROVIDER_ID = "example_inmemory"
+QUERY_PACK = "ocp.query.keyword.v1"
+QUERY_MODE = "keyword"
 PORT = int(os.environ.get("PORT", "4401"))
 BASE_URL = os.environ.get("PUBLIC_BASE_URL", f"http://localhost:{PORT}").rstrip("/")
 
@@ -112,9 +116,9 @@ def manifest() -> dict:
                 "description": "Case-insensitive keyword match over the in-memory product list.",
                 "query_packs": [
                     {
-                        "pack_id": "ocp.query.keyword.v1",
+                        "pack_id": QUERY_PACK,
                         "description": "Keyword search over title, summary, brand, and category.",
-                        "query_modes": ["keyword"],
+                        "query_modes": [QUERY_MODE],
                     }
                 ],
                 "supports_explain": True,
@@ -167,9 +171,71 @@ def _to_entry(product: dict) -> dict:
     }
 
 
+def _finite_number(value) -> bool:
+    return (type(value) is int and abs(value) <= 1.7976931348623157e308) or (type(value) is float and math.isfinite(value))
+
+
+def _query_request(body: dict) -> dict:
+    """Mirror catalogQueryRequestSchema; shared fixtures catch language drift."""
+    fields = {"ocp_version", "kind", "catalog_id", "query_pack", "query_mode", "query",
+              "filters", "limit", "offset", "cursor", "explain"}
+    if not isinstance(body, dict) or set(body) - fields:
+        raise ValueError("invalid catalog query request")
+    for field, allowed in (("ocp_version", {"1.0"}), ("kind", {"CatalogQueryRequest"}),
+                           ("query_mode", {"keyword", "filter", "semantic", "hybrid"})):
+        if field in body and (not isinstance(body[field], str) or body[field] not in allowed):
+            raise ValueError("invalid catalog query request")
+    for field in ("catalog_id", "query_pack", "cursor"):
+        if field in body and (not isinstance(body[field], str) or not body[field]):
+            raise ValueError("invalid catalog query request")
+    text = body.get("query", "")
+    # The shared schema measures string lengths in Unicode code points.
+    if not isinstance(text, str) or len(text) > 500:
+        raise ValueError("query must be a string of at most 500 characters")
+    if "cursor" in body and len(body["cursor"]) > 512:
+        raise ValueError("invalid catalog query request")
+    limit = body.get("limit", 20)
+    if not _finite_number(limit) or not 1 <= limit <= 50 or limit != int(limit):
+        raise ValueError("limit must be an integer between 1 and 50")
+    offset = body.get("offset", 0)
+    if type(offset) not in (int, float) or offset != 0:
+        raise ValueError("offset must be zero; use cursor pagination")
+    if "explain" in body and not isinstance(body["explain"], bool):
+        raise ValueError("explain must be a boolean")
+    filters = body.get("filters", {})
+    string_filters = {"category", "brand", "currency", "availability_status", "provider_id", "sku"}
+    number_filters = {"min_amount", "max_amount"}
+    bool_filters = {"in_stock_only", "has_image"}
+    if not isinstance(filters, dict) or set(filters) - (string_filters | number_filters | bool_filters):
+        raise ValueError("invalid catalog query filters")
+    for field, value in filters.items():
+        if ((field in string_filters and (not isinstance(value, str) or not value))
+                or (field in number_filters and (not _finite_number(value) or value < 0))
+                or (field in bool_filters and not isinstance(value, bool))):
+            raise ValueError("invalid catalog query filters")
+    return {**body, "query": text, "limit": int(limit)}
+
+
+def _query_capability(body: dict) -> None:
+    """Check manifest support after protocol shape validation."""
+    if body.get("query_pack", QUERY_PACK) != QUERY_PACK:
+        raise ValueError(f"unsupported query_pack: only {QUERY_PACK} is supported")
+    # Preserve the example's keyword/list-all default when mode is omitted.
+    if body.get("query_mode", QUERY_MODE) != QUERY_MODE:
+        raise ValueError(f"unsupported query_mode: only {QUERY_MODE} is supported")
+    if body.get("filters", {}):
+        raise ValueError("unsupported filters: this keyword node does not support filter fields")
+
+
 def query(body: dict) -> dict:
-    term = str(body.get("query", "") or "").strip().lower()
-    limit = min(max(int(body.get("limit", 20) or 20), 1), 50)
+    body = _query_request(body)
+    _query_capability(body)
+    cursor = body.get("cursor", "0")
+    if not re.fullmatch(r"[0-9]+", cursor) or int(cursor) > 9007199254740991:
+        raise ValueError("cursor must be a non-negative decimal integer string")
+    offset = int(cursor)
+    term = body["query"].strip().lower()
+    limit = body["limit"]
     if term:
         matches = [
             p
@@ -178,17 +244,19 @@ def query(body: dict) -> dict:
         ]
     else:
         matches = list(PRODUCTS)
-    page = matches[:limit]
+    page = matches[offset:offset + limit]
+    has_more = offset + len(page) < len(matches)
     return {
         "ocp_version": "1.0",
         "kind": "CatalogQueryResult",
         "id": f"qry_{uuid.uuid4()}",
         "catalog_id": CATALOG_ID,
-        "query_pack": "ocp.query.keyword.v1",
-        "query_mode": "keyword",
+        "query_pack": QUERY_PACK,
+        "query_mode": QUERY_MODE,
         "query": body.get("query", "") or "",
         "result_count": len(page),
-        "page": {"limit": limit, "offset": 0, "has_more": False},
+        "page": {"limit": limit, "offset": 0, "has_more": has_more,
+                 **({"next_cursor": str(offset + len(page))} if has_more else {})},
         "entries": [
             {"entry": _to_entry(p), "score": 1, "explain": [f"Keyword match for \"{body.get('query', '')}\"."]}
             for p in page
@@ -247,12 +315,16 @@ class Handler(BaseHTTPRequestHandler):
     def _read_json(self) -> dict:
         length = int(self.headers.get("content-length", 0) or 0)
         if not length:
-            return {}
+            raise ValueError("request body must be a valid JSON object")
         try:
-            parsed = json.loads(self.rfile.read(length).decode("utf-8"))
-            return parsed if isinstance(parsed, dict) else {}
+            def reject_constant(_value):
+                raise ValueError("invalid JSON number")
+            parsed = json.loads(self.rfile.read(length).decode("utf-8"), parse_constant=reject_constant)
+            if not isinstance(parsed, dict):
+                raise ValueError("request body must be a JSON object")
+            return parsed
         except (ValueError, UnicodeDecodeError):
-            return {}
+            raise ValueError("request body must be a valid JSON object") from None
 
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
         routes = {
@@ -269,10 +341,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 (http.server API)
         if self.path == "/ocp/query":
-            self._send(200, query(self._read_json()))
+            try:
+                result = query(self._read_json())
+            except (ValueError, TypeError) as exc:
+                self._send(400, {"error": {"code": "invalid_request", "message": str(exc)}})
+                return
+            self._send(200, result)
             return
         if self.path == "/ocp/resolve":
-            status, payload = resolve(self._read_json())
+            try:
+                status, payload = resolve(self._read_json())
+            except ValueError as exc:
+                self._send(400, {"error": {"code": "invalid_request", "message": str(exc)}})
+                return
             self._send(status, payload)
             return
         self._send(404, {"error": {"code": "not_found", "message": f"No route for POST {self.path}"}})

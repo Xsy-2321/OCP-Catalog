@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { readFile, writeFile } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
 import {
   OcpClient,
   OcpClientError,
@@ -19,6 +18,7 @@ import {
 import { doctorOcpSkill, installOcpSkill, uninstallOcpSkill, type SkillTarget } from './skill-installer';
 import { CLI_HELP, FULL_CLI_HELP, findCommandHelp, findDomainHelp } from './help';
 import { redactSavedProviderApiKey } from './provider-output';
+import { updateOcpCliAndSkill } from './update';
 
 const CLI_PACKAGE_NAME = '@ocp-catalog/ocp-cli';
 const CLI_VERSION = '0.1.3';
@@ -229,32 +229,6 @@ function help(tokens: string[] = []) {
   return FULL_CLI_HELP;
 }
 
-function updateOcpCliAndSkill(options: { manager?: string; dryRun: boolean; target: SkillTarget }) {
-  const manager = options.manager ?? 'bun';
-  const installCommand = manager === 'npm'
-    ? ['npm', 'install', '-g', '@ocp-catalog/ocp-cli@latest']
-    : ['bun', 'install', '-g', '@ocp-catalog/ocp-cli@latest'];
-  const skillCommand = ['ocp', 'skill', 'update', '--target', String(options.target)];
-
-  if (options.dryRun) {
-    return {
-      ok: true,
-      dry_run: true,
-      commands: [installCommand, skillCommand],
-      note: 'update installs the latest CLI package, then runs the updated ocp binary to refresh the local skill',
-    };
-  }
-
-  runCommand(installCommand);
-  runCommand(skillCommand);
-
-  return {
-    ok: true,
-    dry_run: false,
-    commands: [installCommand, skillCommand],
-  };
-}
-
 async function loadManifestTarget(client: OcpClient, target: string): Promise<CatalogManifest | unknown> {
   return target.startsWith('http://') || target.startsWith('https://')
     ? client.inspectCatalog(target)
@@ -293,17 +267,6 @@ function pathJoin(...parts: string[]) {
   return parts.join(process.platform === 'win32' ? '\\' : '/');
 }
 
-function runCommand(command: string[]) {
-  const result = spawnSync(command[0], command.slice(1), {
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-  });
-
-  if (result.status !== 0) {
-    throw new Error(`${command.join(' ')} failed with exit code ${result.status ?? 1}`);
-  }
-}
-
 type ParsedFlags = {
   positionals: string[];
   values: Map<string, string | boolean>;
@@ -316,6 +279,12 @@ function parseFlags(argv: string[]): ParsedFlags {
     const item = argv[index];
     if (!item.startsWith('--')) {
       positionals.push(item);
+      continue;
+    }
+
+    const equals = item.indexOf('=');
+    if (equals !== -1) {
+      values.set(item.slice(2, equals), item.slice(equals + 1));
       continue;
     }
 

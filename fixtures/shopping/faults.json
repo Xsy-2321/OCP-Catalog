@@ -1,0 +1,25 @@
+{
+  "_note": "Phase 2 implements these only when MERCHANT_TEST_MODE=1. Outside test mode none of them are reachable.",
+  "faults": {
+    "payment_timeout_then_succeed": {
+      "effect": "Checkout exceeds its own deadline, returns 202 processing, and settles paid on a later poll.",
+      "exercises": "The timeout must not be reported as a failure."
+    },
+    "payment_declined": {
+      "effect": "Mock payment fails. Attempt becomes failed, no order is created.",
+      "exercises": "No `paid` or `confirmed` state may appear on a failed payment."
+    },
+    "price_raised_after_quote": {
+      "effect": "The catalog price changes between quote and checkout.",
+      "exercises": "terms_hash mismatch -> requote_required, not a silent charge of the new price."
+    },
+    "stock_exhausted_after_quote": {
+      "effect": "The last unit sells to someone else between quote and checkout.",
+      "exercises": "out_of_stock at checkout, and no order."
+    },
+    "response_dropped_after_settlement": {
+      "effect": "Payment settles and the order is created, but the response never reaches the caller.",
+      "exercises": "Repeating with the same Idempotency-Key returns the original order; no second payment."
+    }
+  }
+}

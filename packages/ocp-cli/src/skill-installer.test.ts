@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -6,8 +6,19 @@ import path from 'node:path';
 import { doctorOcpSkill, installOcpSkill, OCP_SKILL_MARKER, resolveSkillTargetDirs, uninstallOcpSkill } from './skill-installer';
 
 const tempDirs: string[] = [];
+const environmentKeys = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR'] as const;
+let savedEnvironment: Partial<Record<typeof environmentKeys[number], string>>;
+
+beforeEach(() => {
+  savedEnvironment = {};
+  for (const key of environmentKeys) { savedEnvironment[key] = process.env[key]; delete process.env[key]; }
+});
 
 afterEach(async () => {
+  for (const key of environmentKeys) {
+    if (savedEnvironment[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnvironment[key];
+  }
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -102,6 +113,14 @@ describe('OCP skill installer', () => {
   test('both stays codex+agents so it keeps its pre-Claude meaning', () => {
     expect(resolveSkillTargetDirs('both')).toHaveLength(2);
     expect(resolveSkillTargetDirs('both').some((item) => item.replaceAll('\\', '/').endsWith('/.claude/skills'))).toBe(false);
+  });
+  test('codex and combined targets honour an isolated custom CODEX_HOME', () => {
+    process.env.CODEX_HOME = path.join(os.tmpdir(), 'ocp-isolated-codex-home');
+    const expected = path.join(process.env.CODEX_HOME, 'skills');
+    expect(resolveSkillTargetDirs('codex')).toEqual([expected]);
+    expect(resolveSkillTargetDirs('auto')).toEqual([expected]);
+    expect(resolveSkillTargetDirs('both')).toContain(expected);
+    expect(resolveSkillTargetDirs('all')).toContain(expected);
   });
 
   test('claude target resolves the Claude Code skills directory', () => {

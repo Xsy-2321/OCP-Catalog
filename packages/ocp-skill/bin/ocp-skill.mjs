@@ -1,18 +1,16 @@
 #!/usr/bin/env node
 // Standalone installer for the OCP Catalog agent skill.
 //
-// This runs under a bare `npx` with no dependencies and no Bun, so it cannot
-// reuse packages/ocp-cli/src/skill-installer.ts (Bun/TypeScript). It
-// deliberately mirrors that module's semantics: atomic replace via a temp
-// directory, backup + rollback on failure, a sha256 content hash, and a
-// managed-install marker so we never clobber a skill we did not write.
+// Runs under bare Node with no dependencies and no Bun. The mechanism is a
+// generated copy of shared/skill-installer-core.mjs; this entry owns only its
+// argument/target selection and permissive skill-name ownership policy.
 
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hashSkillDirectory, readInstallMarker, removeManagedDirectory, replaceManagedDirectory } from './installer-core.mjs';
 
 const SKILL_NAME = 'ocp-catalog';
 const MARKER = '.ocp-skill-install.json';
@@ -194,94 +192,12 @@ function skillSourceDir() {
   return source;
 }
 
-async function copyDirectory(source, target) {
-  await mkdir(target, { recursive: true });
-
-  for (const entry of await readdir(source)) {
-    if (entry === MARKER) continue;
-
-    const sourcePath = path.join(source, entry);
-    const targetPath = path.join(target, entry);
-    const entryStat = await stat(sourcePath);
-
-    if (entryStat.isDirectory()) {
-      await copyDirectory(sourcePath, targetPath);
-    } else if (entryStat.isFile()) {
-      await copyFile(sourcePath, targetPath);
-    }
-  }
-}
-
-async function hashDirectory(sourceDir) {
-  const hash = createHash('sha256');
-
-  const walk = async (currentDir) => {
-    for (const entry of (await readdir(currentDir)).sort()) {
-      if (entry === MARKER) continue;
-
-      const fullPath = path.join(currentDir, entry);
-      const entryStat = await stat(fullPath);
-
-      if (entryStat.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-
-      if (entryStat.isFile()) {
-        hash.update(path.relative(sourceDir, fullPath).replaceAll('\\', '/'));
-        hash.update('\0');
-        hash.update(await readFile(fullPath));
-        hash.update('\0');
-      }
-    }
-  };
-
-  await walk(sourceDir);
-  return hash.digest('hex');
-}
-
 async function readMarker(installDir) {
-  try {
-    return JSON.parse(await readFile(path.join(installDir, MARKER), 'utf8'));
-  } catch {
-    return undefined;
-  }
+  return readInstallMarker(installDir, MARKER);
 }
 
-// Refuse to touch a directory we did not create, unless forced. A skill hand
-// written by the user must never be silently overwritten.
-async function assertManaged(installDir, force, action) {
-  if (force || !existsSync(installDir)) return;
-
-  const marker = await readMarker(installDir);
-  if (!marker || marker.skill_name !== SKILL_NAME) {
-    throw new Error(`Refusing to ${action} unmanaged skill at ${installDir}. Re-run with --force if this is intentional.`);
-  }
-}
-
-async function replaceDirectory(sourceDir, installDir) {
-  const parentDir = path.dirname(installDir);
-  await mkdir(parentDir, { recursive: true });
-
-  const tempDir = await mkdtemp(path.join(parentDir, `.${SKILL_NAME}-new-`));
-  const backupDir = `${installDir}.backup-${Date.now()}`;
-  let hasBackup = false;
-
-  try {
-    await copyDirectory(sourceDir, tempDir);
-    if (existsSync(installDir)) {
-      await rename(installDir, backupDir);
-      hasBackup = true;
-    }
-    await rename(tempDir, installDir);
-    if (hasBackup) await rm(backupDir, { recursive: true, force: true });
-  } catch (error) {
-    await rm(tempDir, { recursive: true, force: true });
-    if (hasBackup && !existsSync(installDir)) {
-      await rename(backupDir, installDir);
-    }
-    throw error;
-  }
+function ownershipPolicy(force) {
+  return { markerName: MARKER, force, isManaged: marker => marker?.skill_name === SKILL_NAME };
 }
 
 async function packageVersion() {
@@ -301,28 +217,21 @@ async function install(skillsDirs, flags) {
     return { ok: true, action: 'install', dry_run: true, planned_install_dirs: installDirs };
   }
 
-  const contentHash = await hashDirectory(sourceDir);
+  const contentHash = await hashSkillDirectory(sourceDir, MARKER);
   const version = await packageVersion();
   const installed = [];
 
   for (const installDir of installDirs) {
-    await assertManaged(installDir, flags.force, 'overwrite');
-    await replaceDirectory(sourceDir, installDir);
-    await writeFile(
-      path.join(installDir, MARKER),
-      `${JSON.stringify(
-        {
-          package_name: PACKAGE_NAME,
-          package_version: version,
-          skill_name: SKILL_NAME,
-          content_hash: contentHash,
-          installed_at: new Date().toISOString(),
-        },
-        null,
-        2,
-      )}\n`,
-      'utf8',
-    );
+    await replaceManagedDirectory(sourceDir, installDir, {
+      ...ownershipPolicy(flags.force),
+      marker: {
+        package_name: PACKAGE_NAME,
+        package_version: version,
+        skill_name: SKILL_NAME,
+        content_hash: contentHash,
+        installed_at: new Date().toISOString(),
+      },
+    });
     installed.push(installDir);
   }
 
@@ -338,10 +247,7 @@ async function uninstall(skillsDirs, flags) {
 
   const removed = [];
   for (const installDir of installDirs) {
-    if (!existsSync(installDir)) continue;
-    await assertManaged(installDir, flags.force, 'uninstall');
-    await rm(installDir, { recursive: true, force: true });
-    removed.push(installDir);
+    if (await removeManagedDirectory(installDir, ownershipPolicy(flags.force))) removed.push(installDir);
   }
 
   return { ok: true, action: 'uninstall', dry_run: false, removed_dirs: removed };

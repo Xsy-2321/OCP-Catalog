@@ -113,3 +113,5 @@ ocp skill doctor --target both
 ```
 
 The standalone runner does not require the full OCP Catalog repository. It uses a bundled CLI when the skill was exported with `bun run skill:ocp:export`; otherwise set `OCP_CLI_COMMAND`, set `OCP_CLI_BIN`, or install an `ocp` binary on PATH.
+
+Every launcher uses an argv array with the shell disabled. Configure `OCP_CLI_BIN` with an executable path, or set `OCP_CLI_COMMAND` to a JSON argv array, for example `["bun", "/path/to/ocp.js"]`. An executable-only `OCP_CLI_COMMAND` remains supported. Legacy shell expressions and whitespace-separated command strings with prefix arguments are rejected; move prefix arguments into the JSON array. Do not configure a shell executable to interpret user input. Windows npm `ocp.cmd` and `npx.cmd` launchers use their package's declared JS entry point through Bun; unsupported batch wrappers must be replaced with an executable or an explicit JS entry point.

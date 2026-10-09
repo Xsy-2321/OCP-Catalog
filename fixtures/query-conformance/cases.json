@@ -1,0 +1,659 @@
+{
+  "description": "Shared request conformance for the three reference nodes. Positive requests use catalogQueryRequestSchema; cursor values follow this example's non-negative safe-integer decimal pagination.",
+  "cases": [
+    {
+      "name": "defaults",
+      "body": {},
+      "status": 200,
+      "result_count": 3,
+      "page_limit": 20
+    },
+    {
+      "name": "keyword",
+      "body": {
+        "query": "headphones"
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 20
+    },
+    {
+      "name": "empty query",
+      "body": {
+        "query": ""
+      },
+      "status": 200,
+      "result_count": 3,
+      "page_limit": 20
+    },
+    {
+      "name": "minimum limit",
+      "body": {
+        "limit": 1
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 1
+    },
+    {
+      "name": "maximum limit",
+      "body": {
+        "limit": 50
+      },
+      "status": 200,
+      "result_count": 3,
+      "page_limit": 50
+    },
+    {
+      "name": "integer-valued JSON number",
+      "body": {
+        "limit": 1
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 1
+    },
+    {
+      "name": "second page",
+      "body": {
+        "limit": 1,
+        "cursor": "1"
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 1,
+      "entry_ids": [
+        "entry_example_inmemory_sku-002"
+      ]
+    },
+    {
+      "name": "leading-zero cursor",
+      "body": {
+        "limit": 1,
+        "cursor": "0001"
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 1,
+      "entry_ids": [
+        "entry_example_inmemory_sku-002"
+      ]
+    },
+    {
+      "name": "safe-integer maximum cursor",
+      "body": {
+        "cursor": "9007199254740991"
+      },
+      "status": 200,
+      "result_count": 0,
+      "page_limit": 20
+    },
+    {
+      "name": "maximum-length decimal cursor",
+      "body": {
+        "limit": 1,
+        "cursor": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "status": 200,
+      "result_count": 1,
+      "page_limit": 1
+    },
+    {
+      "name": "maximum query length",
+      "body": {
+        "query": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "status": 200,
+      "result_count": 0,
+      "page_limit": 20
+    },
+    {
+      "name": "maximum Unicode query length",
+      "body": {
+        "query": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      },
+      "status": 200,
+      "result_count": 0,
+      "page_limit": 20
+    },
+    {
+      "name": "protocol metadata",
+      "body": {
+        "ocp_version": "1.0",
+        "kind": "CatalogQueryRequest",
+        "catalog_id": "cat_fixture",
+        "query_pack": "ocp.query.keyword.v1",
+        "query_mode": "keyword",
+        "offset": 0,
+        "explain": false
+      },
+      "status": 200,
+      "result_count": 3,
+      "page_limit": 20
+    },
+    {
+      "name": "filter field shapes",
+      "body": {
+        "filters": {
+          "category": "electronics",
+          "brand": "Aurora",
+          "currency": "USD",
+          "availability_status": "in_stock",
+          "provider_id": "example_inmemory",
+          "sku": "sku-001",
+          "min_amount": 0,
+          "max_amount": 200.5,
+          "in_stock_only": true,
+          "has_image": false
+        }
+      },
+      "schema_valid": true,
+      "status": 400
+    },
+    {
+      "name": "protocol mode filter",
+      "body": {
+        "query_mode": "filter"
+      },
+      "schema_valid": true,
+      "status": 400
+    },
+    {
+      "name": "protocol mode semantic",
+      "body": {
+        "query_mode": "semantic"
+      },
+      "schema_valid": true,
+      "status": 400
+    },
+    {
+      "name": "protocol mode hybrid",
+      "body": {
+        "query_mode": "hybrid"
+      },
+      "schema_valid": true,
+      "status": 400
+    },
+    {
+      "name": "invalid query 1",
+      "body": {
+        "query": 1
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid query true",
+      "body": {
+        "query": true
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid query null",
+      "body": {
+        "query": null
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid query {}",
+      "body": {
+        "query": {}
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid query []",
+      "body": {
+        "query": []
+      },
+      "status": 400
+    },
+    {
+      "name": "overlong query",
+      "body": {
+        "query": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "status": 400
+    },
+    {
+      "name": "overlong Unicode query",
+      "body": {
+        "query": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit \"abc\"",
+      "body": {
+        "limit": "abc"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit \"1\"",
+      "body": {
+        "limit": "1"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit 1.5",
+      "body": {
+        "limit": 1.5
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit 0",
+      "body": {
+        "limit": 0
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit -1",
+      "body": {
+        "limit": -1
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit 51",
+      "body": {
+        "limit": 51
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit true",
+      "body": {
+        "limit": true
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit null",
+      "body": {
+        "limit": null
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit {}",
+      "body": {
+        "limit": {}
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit []",
+      "body": {
+        "limit": []
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid limit 9007199254740992",
+      "body": {
+        "limit": 9007199254740992
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor \"-1\"",
+      "body": {
+        "cursor": "-1"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor \"1.5\"",
+      "body": {
+        "cursor": "1.5"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor \"wrong\"",
+      "body": {
+        "cursor": "wrong"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor \"9007199254740992\"",
+      "body": {
+        "cursor": "9007199254740992"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor \"\"",
+      "body": {
+        "cursor": ""
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor null",
+      "body": {
+        "cursor": null
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor 1",
+      "body": {
+        "cursor": 1
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor true",
+      "body": {
+        "cursor": true
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor {}",
+      "body": {
+        "cursor": {}
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid cursor \"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"",
+      "body": {
+        "cursor": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid offset 1",
+      "body": {
+        "offset": 1
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid offset -1",
+      "body": {
+        "offset": -1
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid offset \"0\"",
+      "body": {
+        "offset": "0"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid offset false",
+      "body": {
+        "offset": false
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid offset null",
+      "body": {
+        "offset": null
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid offset {}",
+      "body": {
+        "offset": {}
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid offset []",
+      "body": {
+        "offset": []
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid explain null",
+      "body": {
+        "explain": null
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid explain 1",
+      "body": {
+        "explain": 1
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid explain \"true\"",
+      "body": {
+        "explain": "true"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid explain {}",
+      "body": {
+        "explain": {}
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid explain []",
+      "body": {
+        "explain": []
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"unknown\":true}",
+      "body": {
+        "unknown": true
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"query\":{\"mode\":\"keyword\",\"text\":\"headphones\"}}",
+      "body": {
+        "query": {
+          "mode": "keyword",
+          "text": "headphones"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"ocp_version\":\"2.0\"}",
+      "body": {
+        "ocp_version": "2.0"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"kind\":\"query\"}",
+      "body": {
+        "kind": "query"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"catalog_id\":\"\"}",
+      "body": {
+        "catalog_id": ""
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"query_pack\":\"\"}",
+      "body": {
+        "query_pack": ""
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"query_mode\":\"unknown\"}",
+      "body": {
+        "query_mode": "unknown"
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"query_mode\":null}",
+      "body": {
+        "query_mode": null
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":null}",
+      "body": {
+        "filters": null
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":[]}",
+      "body": {
+        "filters": []
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":{\"unknown\":true}}",
+      "body": {
+        "filters": {
+          "unknown": true
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":{\"brand\":\"\"}}",
+      "body": {
+        "filters": {
+          "brand": ""
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":{\"brand\":1}}",
+      "body": {
+        "filters": {
+          "brand": 1
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":{\"min_amount\":-1}}",
+      "body": {
+        "filters": {
+          "min_amount": -1
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":{\"max_amount\":\"20\"}}",
+      "body": {
+        "filters": {
+          "max_amount": "20"
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":{\"in_stock_only\":1}}",
+      "body": {
+        "filters": {
+          "in_stock_only": 1
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "invalid fields {\"filters\":{\"has_image\":null}}",
+      "body": {
+        "filters": {
+          "has_image": null
+        }
+      },
+      "status": 400
+    },
+    {
+      "name": "empty JSON",
+      "raw_body": "",
+      "status": 400
+    },
+    {
+      "name": "malformed JSON",
+      "raw_body": "{",
+      "status": 400
+    },
+    {
+      "name": "null JSON",
+      "raw_body": "null",
+      "status": 400
+    },
+    {
+      "name": "array JSON",
+      "raw_body": "[]",
+      "status": 400
+    },
+    {
+      "name": "number JSON",
+      "raw_body": "1",
+      "status": 400
+    },
+    {
+      "name": "string JSON",
+      "raw_body": "\"query\"",
+      "status": 400
+    },
+    {
+      "name": "boolean JSON",
+      "raw_body": "true",
+      "status": 400
+    },
+    {
+      "name": "multiple JSON values",
+      "raw_body": "{} {}",
+      "status": 400
+    },
+    {
+      "name": "NaN JSON",
+      "raw_body": "{\"limit\":NaN}",
+      "status": 400
+    },
+    {
+      "name": "infinite JSON",
+      "raw_body": "{\"limit\":Infinity}",
+      "status": 400
+    },
+    {
+      "name": "overflowing JSON number",
+      "raw_body": "{\"limit\":1e309}",
+      "status": 400
+    },
+    {
+      "name": "overflowing filter number",
+      "raw_body": "{\"filters\":{\"min_amount\":1e309}}",
+      "status": 400
+    },
+    {
+      "name": "huge integer limit",
+      "raw_body": "{\"limit\":9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999}",
+      "status": 400
+    }
+  ]
+}

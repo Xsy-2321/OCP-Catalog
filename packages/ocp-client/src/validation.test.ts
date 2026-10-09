@@ -50,6 +50,30 @@ const manifest: CatalogManifest = {
 };
 
 describe('manifest-aware query validation', () => {
+  test('filters must all belong to one selected capability, including explicit false', () => {
+    const split: CatalogManifest = {
+      ...manifest,
+      query_capabilities: [
+        { ...manifest.query_capabilities[0]!, capability_id: 'categories', input_fields: [{ name: 'filters.category' }] },
+        { ...manifest.query_capabilities[0]!, capability_id: 'brands', input_fields: [{ name: 'filters.brand' }] },
+      ],
+    };
+    const request: CatalogQueryRequest = { query: 'shoes', query_mode: 'hybrid', filters: { category: 'shoes', brand: 'Acme' }, limit: 10, offset: 0, explain: true };
+    expect(() => validateCatalogQueryRequest(split, request)).toThrow(OcpClientValidationError);
+    const selected = validateCatalogQueryRequest(split, { ...request, filters: { brand: 'Acme' } });
+    expect(selected.policy_summary.selected_capability_id).toBe('brands');
+    expect(selected.policy_summary.accepted_filters).toEqual(['brand']);
+    expect(() => validateCatalogQueryRequest(split, { ...request, filters: { in_stock_only: false } })).toThrow(OcpClientValidationError);
+    expect(validateCatalogQueryRequest(manifest, { ...request, filters: { in_stock_only: false } }).policy_summary.accepted_filters)
+      .toEqual(['in_stock_only']);
+  });
+
+  test('a capability declaring no filter inputs cannot accept arbitrary filters', () => {
+    const noFilters = { ...manifest, query_capabilities: [{ ...manifest.query_capabilities[0]!, input_fields: [] }] };
+    expect(() => validateCatalogQueryRequest(noFilters, { query: 'shoes', query_mode: 'keyword', filters: { brand: 'Acme' }, limit: 10, offset: 0, explain: true }))
+      .toThrow(OcpClientValidationError);
+  });
+
   test('selects a declared query pack before sending a valid query', () => {
     const request: CatalogQueryRequest = {
       query: 'running shoes',

@@ -9,7 +9,7 @@ type Props = {
 
 function statusBadgeCopy(status: RegistryRuntime['status'], locale: DocsLocale) {
   if (status === 'live') return locale === 'zh' ? '在线' : 'live';
-  if (status === 'unreachable') return locale === 'zh' ? '不可达' : 'unreachable';
+  if (status === 'unreachable') return locale === 'zh' ? '暂不可用' : 'unavailable';
   return locale === 'zh' ? '检测中' : 'probing';
 }
 
@@ -71,15 +71,21 @@ export function RegistryCard({ runtime, locale }: Props) {
       )}
 
       <dl className="mt-4 grid grid-cols-3 gap-2 border-t border-[var(--border-soft)] pt-3">
-        <Metric value={catalogCount} label={locale === 'zh' ? 'catalogs' : 'catalogs'} />
+        <Metric value={catalogCount ?? '—'} label={locale === 'zh' ? 'catalogs' : 'catalogs'} />
         <Metric
-          value={verifiedCount}
+          value={verifiedCount ?? '—'}
           label={locale === 'zh' ? '已验证' : 'verified'}
           icon={ShieldCheck}
           tone="cyan"
         />
-        <Metric value={healthyCount} label={locale === 'zh' ? '健康' : 'healthy'} tone="green" />
+        <Metric value={healthyCount ?? '—'} label={locale === 'zh' ? '健康' : 'healthy'} tone="green" />
       </dl>
+
+      {runtime.error && (
+        <p role="status" className="mt-3 break-all text-xs text-[var(--ocp-vermilion)]">
+          {runtime.error}
+        </p>
+      )}
 
       <footer className="mt-3 flex items-center justify-between border-t border-[var(--border-soft)] pt-3 text-[11px] text-[var(--text-faint)]">
         <span>{resolveLocalizedText(seed.operator, locale)}</span>

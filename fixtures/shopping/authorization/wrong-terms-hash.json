@@ -1,0 +1,19 @@
+{
+  "scheme": "ed25519",
+  "key_id": "agent_a_test",
+  "signature": "nIrJ57XVgsDBTQ2Ry-r9pEjo3lJgsznbMvBCA8Jv12Z2T2VX-yjFrNAnEEL-f9BBfaswd52wm8zEMNnbzJh8Bg",
+  "payload": {
+    "v": "ocp.demo.auth.v1",
+    "issuer": "agent_a_demo",
+    "user_id": "user_demo_1",
+    "merchant_id": "merchant_coffee_demo",
+    "quote_id": "quote_fixture_latte_pickup",
+    "terms_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "currency": "CNY",
+    "max_total_minor": 3000,
+    "purchase_attempt_id": "att_fixture_0004",
+    "issued_at": 1791367200,
+    "expires_at": 1791368100,
+    "jti": "jti_fixture_0004"
+  }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { requestJson, startPolling } from './request';
 
 export type PublicActivityEvent = {
   public_event_id: string;
@@ -81,40 +82,35 @@ export function useLiveActivity({ limit = 40, windowHours = 24, pollMs = 15_000 
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
+    async function load(signal: AbortSignal) {
       try {
-        const [recentResponse, rollupResponse] = await Promise.all([
-          fetch(`${activityApiUrl}/api/activity/recent?limit=${limit}`),
-          fetch(`${activityApiUrl}/api/activity/rollups?hours=${windowHours}`),
+        const responses = await Promise.allSettled([
+          requestJson(`${activityApiUrl}/api/activity/recent?limit=${limit}`, { signal }),
+          requestJson(`${activityApiUrl}/api/activity/rollups?hours=${windowHours}`, { signal }),
         ]);
-
-        if (!recentResponse.ok || !rollupResponse.ok) throw new Error('Activity API unavailable');
-        const recentPayload = await recentResponse.json();
-        const rollupPayload = await rollupResponse.json();
+        const [recent, rollup] = responses;
+        if (recent.status === 'rejected') throw recent.reason;
+        if (rollup.status === 'rejected') throw rollup.reason;
+        const recentPayload = recent.value;
+        const rollupPayload = rollup.value;
         const parsedEvents = parseEvents(recentPayload);
         const parsedRollups = parseRollups(rollupPayload);
-        if (cancelled) return;
+        if (signal.aborted) return;
 
         setEvents(parsedEvents);
         setRollups(parsedRollups);
         setError(null);
         setStatus('ready');
       } catch (loadError) {
-        if (!cancelled) {
+        if (!signal.aborted) {
           setError(loadError instanceof Error ? loadError.message : 'Activity API unavailable');
           setStatus('error');
         }
       }
     }
 
-    void load();
-    const timer = setInterval(load, pollMs);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+    const polling = startPolling(load, pollMs);
+    return () => polling.stop();
   }, [limit, windowHours, pollMs]);
 
   return { events, rollups, status, error };

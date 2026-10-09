@@ -108,6 +108,7 @@ export function CatalogDrawer({ catalog, registryName, locale, onClose }: Props)
                 status={manifestState.status}
                 error={manifestState.error}
                 manifest={manifestState.manifest}
+                onRefresh={manifestState.refresh}
                 locale={locale}
               />
 
@@ -223,12 +224,14 @@ function LiveManifestSection({
   status,
   error,
   manifest,
+  onRefresh,
   locale,
 }: {
   manifestUrl: string | null;
   status: 'idle' | 'loading' | 'ready' | 'error';
   error: string | null;
   manifest: CatalogManifest | null;
+  onRefresh: () => void;
   locale: DocsLocale;
 }) {
   if (!manifestUrl) return null;
@@ -276,6 +279,9 @@ function LiveManifestSection({
               {manifestUrl}
               <ExternalLink className="h-3 w-3 shrink-0" />
             </a>
+            <button type="button" onClick={onRefresh} className="mt-2 block rounded border border-[var(--border-soft)] px-3 py-1.5">
+              {locale === 'zh' ? '重试' : 'Retry'}
+            </button>
           </div>
         </div>
       </Section>
@@ -291,6 +297,9 @@ function LiveManifestSection({
   return (
     <Section title={title}>
       <p className="mb-3 text-xs text-[var(--text-faint)]">{hint}</p>
+      <button type="button" onClick={onRefresh} className="mb-3 rounded border border-[var(--border-soft)] px-3 py-1.5 text-xs">
+        {locale === 'zh' ? '刷新 Manifest' : 'Refresh manifest'}
+      </button>
 
       {allEndpoints.length > 0 && (
         <div className="mb-3 space-y-1">
@@ -386,8 +395,8 @@ function LiveManifestSection({
           </pre>
           <p className="mt-2 text-[11px] text-[var(--text-faint)]">
             {locale === 'zh'
-              ? '基于 manifest 第一项 capability/pack 生成。实际字段名（如 query.text）以该 Catalog 文档为准。'
-              : "Generated from the manifest's first capability/pack. The exact field names (e.g. query.text) depend on this catalog's docs."}
+              ? '基于 manifest 第一项 capability/pack 生成，已按 OCP 查询协议校验。'
+              : "Generated from the manifest's first capability/pack and validated against the OCP query schema."}
           </p>
         </div>
       )}

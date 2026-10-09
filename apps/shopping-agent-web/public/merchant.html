@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>一杯之间 · 商家演示（只读）</title>
+  <link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/merchant.css"><script src="/merchant.js" type="module"></script>
+</head>
+<body class="demo-surface merchant-surface">
+  <div class="page">
+    <header><a class="brand" href="/demo" aria-label="一杯之间演示门户"><span class="brand-icon" aria-hidden="true"></span><span>一杯之间<small>MERCHANT DEMO / READ ONLY</small></span></a><nav class="demo-nav" aria-label="演示视角"><a href="/demo">演示入口</a><a href="/">用户演示</a><a href="/merchant" aria-current="page">商家演示</a></nav><span class="mode">本机商家视角 · 只读</span></header>
+    <main class="merchant-main">
+      <section class="merchant-hero"><div><p class="eyebrow">THE MERCHANT'S VIEW</p><h1>店里的咖啡，<br>与每一笔订单。</h1><p>商品、库存、付款与履约，按商家保存的记录分别展示。</p></div><div class="demo-disclosure"><strong>本机演示身份 · 非账号登录</strong><p>这是只读看板，付款与履约均为本地模拟。订单列表隐藏收件信息，点击详情后查看。</p><a href="/">返回用户购物页 ↗</a></div></section>
+      <section class="snapshot-bar" aria-label="数据读取时间"><p id="checked-at">上次成功读取：暂无</p><button type="button" id="merchant-refresh" class="secondary">刷新商品与订单</button></section>
+      <div id="merchant-notice" role="status" aria-live="polite" hidden></div>
+      <section class="merchant-counts" aria-label="记录数量"><div><span>商品数量</span><strong id="product-total">—</strong><small>含暂无库存的商品</small></div><div><span>已保存订单</span><strong id="order-total">—</strong><small>付款与履约分别显示</small></div></section>
+      <div class="merchant-tabs" role="tablist" aria-label="商家只读数据"><button type="button" id="products-tab" role="tab" aria-selected="true" aria-controls="products-panel">商品与库存</button><button type="button" id="orders-tab" role="tab" aria-selected="false" aria-controls="orders-panel" tabindex="-1">订单记录</button></div>
+      <section id="products-panel" class="merchant-panel" role="tabpanel" aria-labelledby="products-tab"><div class="section-heading"><div><h2>商品与库存</h2><p class="helper-text">可用库存与预留数量分别展示。商品价格用于展示，最终金额以报价与订单为准。</p></div><span class="read-only-tag">只读</span></div><p id="products-state" class="list-state" role="status">正在读取商品…</p><div class="merchant-table-wrap" id="products-table-wrap" hidden><table class="merchant-table"><thead><tr><th scope="col">商品</th><th scope="col">商品价 / 份</th><th scope="col">库存状态</th><th scope="col">可用</th><th scope="col">预留</th><th scope="col">履约与配送费</th></tr></thead><tbody id="products-list"></tbody></table></div><div class="pagination-row"><span id="products-count" class="helper-text"></span><button type="button" id="products-more" class="secondary" hidden>加载更多商品</button></div></section>
+      <section id="orders-panel" class="merchant-panel" role="tabpanel" aria-labelledby="orders-tab" hidden><div class="section-heading"><div><h2>订单记录</h2><p class="helper-text">已付款代表模拟付款结果；取餐或配送进度以独立的履约状态为准。</p></div><span class="read-only-tag">只读</span></div><p id="orders-state" class="list-state" role="status">正在读取订单…</p><div id="orders-list" class="merchant-order-list"></div><div class="pagination-row"><span id="orders-count" class="helper-text"></span><button type="button" id="orders-more" class="secondary" hidden>加载更多订单</button></div></section>
+      <p class="demo-footnote">刷新会读取一次商品与订单快照；分页读取当前记录。页面仅提供查看与刷新。</p>
+    </main>
+    <div class="page-footer"><span>OCP CATALOG / MERCHANT DEMO</span><span>只读 · 本地模拟付款 · 本地模拟履约</span></div>
+  </div>
+  <dialog id="order-dialog" aria-labelledby="order-detail-heading"><div class="detail-heading"><div><p class="eyebrow">ORDER RECORD · READ ONLY</p><h2 id="order-detail-heading">订单详情</h2></div><button type="button" id="detail-close" class="secondary" aria-label="关闭订单详情">关闭</button></div><p class="helper-text">以下信息来自商家保存的本地模拟订单。收件信息仅在详情展示。</p><div id="order-detail" aria-live="polite"></div></dialog>
+</body>
+</html>
