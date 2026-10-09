@@ -17,8 +17,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     env:
-      CODEX_HOME: ${{ runner.temp }}/ocp-test-codex
-      CLAUDE_CONFIG_DIR: ${{ runner.temp }}/ocp-test-claude
       DEEPSEEK_API_KEY: ''
       SHOPPING_LLM_API_KEY: ''
     steps:
@@ -35,6 +33,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Isolate test profile directories
+        shell: bash
+        run: |
+          echo "CODEX_HOME=${RUNNER_TEMP}/ocp-test-codex" >> "$GITHUB_ENV"
+          echo "CLAUDE_CONFIG_DIR=${RUNNER_TEMP}/ocp-test-claude" >> "$GITHUB_ENV"
       - run: bun run runtime:check
       - run: bun install --frozen-lockfile
       - run: bun run engineering:inputs
