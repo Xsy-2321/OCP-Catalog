@@ -55,8 +55,10 @@
       },
       "fulfillment": {
         "methods": [
-          "pickup"
-        ]
+          "pickup",
+          "delivery"
+        ],
+        "delivery_fee_minor": 500
       }
     },
     "_fixture_note": "最便宜的一项，用来验证排序与多候选比较。"

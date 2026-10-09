@@ -5,9 +5,10 @@ import { CommerceError, type CheckoutRequest, type Quote } from '@ocp-catalog/sh
 import { loadCatalog, findEntry } from './catalog';
 import { CATALOG_SEED } from './data/catalog';
 import { runCheckout, settlePendingAttempt } from './checkout';
-import { catalogWithInventory } from './inventory';
+import { catalogWithInventory, consumeInventory, releaseInventory, reserveBasketInventory } from './inventory';
+import { inTransaction, MERCHANT_SCHEMA_VERSION, openMerchantDb } from './db';
 import { buildQuote, insertQuote } from './quote';
-import { countOrders, insertProcessingAttempt } from './orders';
+import { countOrders, insertProcessingAttempt, markAttemptFailed } from './orders';
 import { countPayments } from './payment';
 import type { MerchantContext } from './context';
 import { authorizationFor, makeTestContext, makeTempDatabasePath, TEST_NOW_MS } from './test-support';
@@ -37,9 +38,156 @@ function checkout(ctx: MerchantContext, value: Quote, attemptId: string) {
   return runCheckout(ctx, body(value, attemptId), { callerId: CALLER, idempotencyKey: `key_${attemptId}` });
 }
 
-function available(ctx: MerchantContext): number | undefined {
-  return findEntry(catalogWithInventory(ctx), 'entry_latte')!.attributes.inventory.quantity;
+function available(ctx: MerchantContext, entryId = 'entry_latte'): number | undefined {
+  return findEntry(catalogWithInventory(ctx), entryId)!.attributes.inventory.quantity;
 }
+
+function basketCatalog(quantity = 1) {
+  return loadCatalog(CATALOG_SEED.filter(entry => ['entry_latte', 'entry_americano'].includes(entry.entry_id)).map(entry => ({
+    ...entry, attributes: { ...entry.attributes, inventory: { availability_status: 'in_stock', quantity } },
+  })));
+}
+function basketQuote(ctx: MerchantContext): Quote {
+  const value = buildQuote(catalogWithInventory(ctx), {
+    items: [{ entry_id: 'entry_latte', quantity: 1 }, { entry_id: 'entry_americano', quantity: 1 }], fulfillment: { method: 'pickup' },
+  }, { config: ctx.config, nowMs: ctx.clock.nowMs() });
+  insertQuote(ctx.db, value, CALLER);
+  return value;
+}
+
+describe('basket inventory and schema migration', () => {
+  test('a second-item shortage rolls back the first reservation even when the outer checkout caches rejection', () => {
+    const ctx = makeTestContext({ catalog: basketCatalog(2) });
+    try {
+      ctx.db.query('UPDATE inventory SET available_quantity = 0 WHERE entry_id = ?').run('entry_americano');
+      inTransaction(ctx.db, () => {
+        expect(() => reserveBasketInventory(ctx, 'att_partial_basket', [
+          { entry_id: 'entry_latte', quantity: 1 }, { entry_id: 'entry_americano', quantity: 1 },
+        ])).toThrow(CommerceError);
+        // A caller may deliberately commit its cached rejection after catching
+        // this error; the helper must have rolled back its own stock work.
+        ctx.db.query('INSERT INTO purchase_events VALUES (?, ?, ?, ?, ?, ?)')
+          .run('evt_cached_decline', 'attempt', 'att_partial_basket', 'attempt.failed', TEST_NOW_MS, '{}');
+      });
+      expect(available(ctx)).toBe(2);
+      expect(available(ctx, 'entry_americano')).toBe(0);
+      expect(ctx.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM inventory_reservations').get()!.n).toBe(0);
+      expect(ctx.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM purchase_events').get()!.n).toBe(1);
+      expect(countPayments(ctx.db)).toBe(0);
+    } finally { ctx.db.close(); }
+  });
+
+  test('duplicate basket ids are rejected before deducting any stock', () => {
+    const ctx = makeTestContext({ catalog: basketCatalog(2) });
+    try {
+      expect(() => reserveBasketInventory(ctx, 'att_duplicate_basket', [
+        { entry_id: 'entry_latte', quantity: 1 }, { entry_id: 'entry_latte', quantity: 1 },
+      ])).toThrow(CommerceError);
+      expect(available(ctx)).toBe(2);
+      expect(ctx.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM inventory_reservations').get()!.n).toBe(0);
+    } finally { ctx.db.close(); }
+  });
+
+  test('consumption marks every reserved basket row without a second stock deduction', () => {
+    const ctx = makeTestContext({ catalog: basketCatalog(3) });
+    try {
+      inTransaction(ctx.db, () => {
+        reserveBasketInventory(ctx, 'att_consume_basket', [{ entry_id: 'entry_latte', quantity: 1 }, { entry_id: 'entry_americano', quantity: 2 }]);
+        consumeInventory(ctx.db, 'att_consume_basket');
+      });
+      expect(available(ctx)).toBe(2);
+      expect(available(ctx, 'entry_americano')).toBe(1);
+      expect(ctx.db.query<{ state: string }, []>('SELECT state FROM inventory_reservations ORDER BY entry_id').all()).toEqual([{ state: 'consumed' }, { state: 'consumed' }]);
+      expect(() => consumeInventory(ctx.db, 'att_consume_basket')).toThrow();
+      expect(available(ctx)).toBe(2);
+    } finally { ctx.db.close(); }
+  });
+
+  test('a v2 migration preserves confirmed, pending and failed transactions and exact existing stock across two restarts', () => {
+    const temp = makeTempDatabasePath();
+    let ctx = makeTestContext({ databasePath: temp.path, catalog: basketCatalog(6) });
+    try {
+      checkout(ctx, quote(ctx), 'att_v2_confirmed');
+      const pendingContext = makeTestContext({ databasePath: temp.path, catalog: basketCatalog(6), faults: ['payment_timeout_then_succeed'] });
+      try { expect(checkout(pendingContext, quote(pendingContext), 'att_v2_pending').kind).toBe('processing'); }
+      finally { pendingContext.db.close(); }
+      const failedContext = makeTestContext({ databasePath: temp.path, catalog: basketCatalog(6), faults: ['payment_declined'] });
+      try { expect(checkout(failedContext, quote(failedContext), 'att_v2_failed').kind).toBe('declined'); }
+      finally { failedContext.db.close(); }
+      const tables = ['quotes', 'attempts', 'orders', 'payments', 'idempotency_records', 'inventory', 'inventory_debts', 'inventory_reservations'] as const;
+      const snapshot = () => Object.fromEntries(tables.map(table => [table, ctx.db.query(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
+      const before = snapshot();
+      // Recreate the exact old single-attempt reservation primary key in this
+      // isolated database, leaving every business row and stock count intact.
+      ctx.db.exec(`CREATE TABLE inventory_reservations_v2 (
+        purchase_attempt_id TEXT PRIMARY KEY, merchant_id TEXT NOT NULL, entry_id TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK (quantity > 0), state TEXT NOT NULL CHECK (state IN ('reserved','consumed','released')),
+        FOREIGN KEY (merchant_id, entry_id) REFERENCES inventory (merchant_id, entry_id)
+      );
+      INSERT INTO inventory_reservations_v2 SELECT * FROM inventory_reservations;
+      DROP TABLE inventory_reservations;
+      ALTER TABLE inventory_reservations_v2 RENAME TO inventory_reservations;
+      UPDATE schema_meta SET value = '2' WHERE key = 'schema_version';`);
+      ctx.db.close();
+      ctx = makeTestContext({ databasePath: temp.path, catalog: basketCatalog(99) });
+      expect(snapshot()).toEqual(before);
+      expect(available(ctx)).toBe(4);
+      expect(ctx.db.query<{ value: string }, []>("SELECT value FROM schema_meta WHERE key='schema_version'").get()!.value).toBe(String(MERCHANT_SCHEMA_VERSION));
+      expect(ctx.db.query<{ name: string; pk: number }, []>('PRAGMA table_info(inventory_reservations)').all()
+        .filter(column => column.pk > 0).sort((left, right) => left.pk - right.pk).map(column => column.name)).toEqual(['purchase_attempt_id', 'entry_id']);
+      expect(ctx.db.query('PRAGMA foreign_key_check').all()).toEqual([]);
+      ctx.db.close(); ctx = makeTestContext({ databasePath: temp.path, catalog: basketCatalog(99) });
+      expect(snapshot()).toEqual(before);
+      expect(settlePendingAttempt(ctx, 'att_v2_pending', CALLER).status).toBe('confirmed');
+      expect(available(ctx)).toBe(4);
+      expect(countOrders(ctx.db)).toBe(2);
+      expect(countPayments(ctx.db)).toBe(3);
+    } finally { ctx.db.close(); temp.cleanup(); }
+  });
+
+  test('v1 history imports every basket item and declining a pending basket pays off each historical debt once', () => {
+    const temp = makeTempDatabasePath();
+    let ctx = makeTestContext({ databasePath: temp.path, catalog: basketCatalog(1) });
+    try {
+      const sold = basketQuote(ctx), pending = basketQuote(ctx), failed = basketQuote(ctx);
+      expect(checkout(ctx, sold, 'att_v1_basket_sold').kind).toBe('confirmed');
+      for (const [attemptId, value, isPending] of [
+        ['att_v1_basket_pending', pending, true], ['att_v1_basket_failed', failed, false],
+      ] as const) {
+        insertProcessingAttempt(ctx.db, { attemptId, callerId: CALLER, merchantId: ctx.config.merchantId,
+          quoteId: value.quote_id, catalogId: ctx.config.catalogId, pendingSettlement: isPending, nowMs: TEST_NOW_MS });
+        if (!isPending) markAttemptFailed(ctx.db, { attemptId, error: { code: 'payment_failed', message: 'legacy declined' }, nowMs: TEST_NOW_MS });
+      }
+      ctx.db.exec("DROP TABLE inventory_debts; DROP TABLE inventory_reservations; DROP TABLE inventory; UPDATE schema_meta SET value='1' WHERE key='schema_version';");
+      ctx.db.close();
+      ctx = makeTestContext({ databasePath: temp.path, catalog: basketCatalog(1), faults: ['payment_declined'] });
+      expect(available(ctx)).toBe(0);
+      expect(available(ctx, 'entry_americano')).toBe(0);
+      expect(ctx.db.query<{ state: string; quantity: number }, []>('SELECT state, quantity FROM inventory_reservations ORDER BY purchase_attempt_id,entry_id').all())
+        .toEqual([{ state: 'released', quantity: 1 }, { state: 'released', quantity: 1 },
+          { state: 'reserved', quantity: 1 }, { state: 'reserved', quantity: 1 }, { state: 'consumed', quantity: 1 }, { state: 'consumed', quantity: 1 }]);
+      expect(ctx.db.query<{ quantity: number }, []>('SELECT quantity FROM inventory_debts ORDER BY entry_id').all()).toEqual([{ quantity: 1 }, { quantity: 1 }]);
+      expect(settlePendingAttempt(ctx, 'att_v1_basket_pending', CALLER).status).toBe('failed');
+      expect(available(ctx)).toBe(0);
+      expect(available(ctx, 'entry_americano')).toBe(0);
+      expect(ctx.db.query<{ quantity: number }, []>('SELECT quantity FROM inventory_debts ORDER BY entry_id').all()).toEqual([{ quantity: 0 }, { quantity: 0 }]);
+      expect(() => releaseInventory(ctx.db, 'att_v1_basket_pending')).toThrow();
+      expect(settlePendingAttempt(ctx, 'att_v1_basket_pending', CALLER).status).toBe('failed');
+      expect(countOrders(ctx.db)).toBe(1);
+      expect(countPayments(ctx.db)).toBe(2);
+      ctx.db.close(); ctx = makeTestContext({ databasePath: temp.path, catalog: basketCatalog(1) });
+      expect(available(ctx)).toBe(0); expect(available(ctx, 'entry_americano')).toBe(0);
+    } finally { ctx.db.close(); temp.cleanup(); }
+  });
+
+  test('a newer schema version fails closed instead of being rewritten as this version', () => {
+    const temp = makeTempDatabasePath(), db = openMerchantDb(temp.path);
+    try {
+      db.query("UPDATE schema_meta SET value='4' WHERE key='schema_version'").run(); db.close();
+      expect(() => openMerchantDb(temp.path)).toThrow('unsupported schema version');
+    } finally { db.close(); temp.cleanup(); }
+  });
+});
 
 describe('persistent transaction inventory', () => {
   test('a declined legacy pending attempt resolves historical overcommit without recreating stock sold to another order', () => {

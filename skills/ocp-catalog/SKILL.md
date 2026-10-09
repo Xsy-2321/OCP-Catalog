@@ -29,6 +29,8 @@ ocp events tail --activity-url https://ocp.deeplumen.io
 
 The runner resolves the CLI in this order: `OCP_CLI_COMMAND`, `OCP_CLI_BIN`, bundled skill CLI, `ocp` on PATH, `bunx @ocp-catalog/ocp-cli`, then `npx @ocp-catalog/ocp-cli`.
 
+The runner always forwards arguments without a shell. `OCP_CLI_BIN` is an executable path; `OCP_CLI_COMMAND` is either an executable alone or a JSON argv array such as `["bun", "/path/to/ocp.js"]`. Old shell expressions and command strings with prefix arguments must be migrated to JSON argv or a CLI wrapper that preserves arguments. On Windows, known npm `ocp.cmd` and `npx.cmd` shims are resolved to their package's JS entry point and run with Bun; other `.cmd`/`.bat` wrappers and shell executables are rejected. If no PATH launcher is available, the current Bun runtime runs `bun x @ocp-catalog/ocp-cli`.
+
 If this skill is not yet installed for your agent, install it with `npx @ocp-catalog/skill` (add `--agent claude|codex|agents|all`), or add it as a Claude Code plugin from the `Open-Commerce-Protocol/OCP-Catalog` marketplace.
 
 For command details, read `references/cli-usage.md`.

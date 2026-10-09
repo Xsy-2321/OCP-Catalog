@@ -31,3 +31,4 @@ export * from './orders';
 export * from './checkout';
 export * from './http';
 export * from './service';
+export * from './merchant-read';

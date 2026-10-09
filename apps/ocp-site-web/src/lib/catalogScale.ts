@@ -26,7 +26,6 @@ export function aggregateCatalogScale(probes: ManifestProbe[]): CatalogScale {
   let storedTotal = 0;
   let storedCatalogCount = 0;
   let streamedCatalogCount = 0;
-  let readyCount = 0;
   let pendingCount = 0;
 
   for (const probe of probes) {
@@ -38,7 +37,6 @@ export function aggregateCatalogScale(probes: ManifestProbe[]): CatalogScale {
       continue;
     }
     // status === 'ready'
-    readyCount += 1;
     if (probe.dataProfileCount != null) {
       storedTotal += probe.dataProfileCount;
       storedCatalogCount += 1;

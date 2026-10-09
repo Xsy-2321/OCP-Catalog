@@ -10,6 +10,7 @@ exists yet).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import threading
 import unittest
 import urllib.request
@@ -31,7 +32,11 @@ def _get(port: int, path: str):
 
 
 def _post(port: int, path: str, body: dict):
-    data = json.dumps(body).encode()
+    return _post_raw(port, path, json.dumps(body))
+
+
+def _post_raw(port: int, path: str, raw: str):
+    data = raw.encode()
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}", data=data, headers={"content-type": "application/json"}, method="POST"
     )
@@ -83,6 +88,77 @@ class ConformanceTest(unittest.TestCase):
     def test_query_empty_returns_all(self) -> None:
         _, body = _post(self.port, "/ocp/query", {})
         self.assertEqual(body["result_count"], 3)
+
+    def test_cursor_pagination(self) -> None:
+        ids = []
+        cursor = None
+        for page_number in range(3):
+            request = {"limit": 1}
+            if cursor is not None:
+                request["cursor"] = cursor
+            status, body = _post(self.port, "/ocp/query", request)
+            self.assertEqual(status, 200)
+            self.assertEqual(body["result_count"], 1)
+            self.assertEqual(body["page"]["offset"], 0)
+            self.assertEqual(body["page"]["has_more"], page_number < 2)
+            ids.append(body["entries"][0]["entry"]["entry_id"])
+            cursor = body["page"].get("next_cursor")
+        self.assertEqual(len(set(ids)), 3)
+        self.assertIsNone(cursor)
+        _, end = _post(self.port, "/ocp/query", {"limit": 1, "cursor": "999"})
+        self.assertEqual(end["entries"], [])
+        self.assertFalse(end["page"]["has_more"])
+
+    def test_invalid_cursors(self) -> None:
+        for cursor in ["-1", "1.5", "wrong", "9007199254740992", None, 1]:
+            status, body = _post(self.port, "/ocp/query", {"limit": 1, "cursor": cursor})
+            self.assertEqual(status, 400)
+            self.assertEqual(body["error"]["code"], "invalid_request")
+
+    def test_shared_query_conformance(self) -> None:
+        fixture = json.loads((Path(__file__).resolve().parents[2] / "fixtures/query-conformance/cases.json").read_text(encoding="utf-8"))
+        for example in fixture["cases"]:
+            with self.subTest(example=example["name"]):
+                if example.get("schema_valid"):
+                    server._query_request(example["body"])
+                self.assert_query_case(example)
+
+    def test_shared_query_capability_semantics(self) -> None:
+        fixture = json.loads((Path(__file__).resolve().parents[2] / "fixtures/query-conformance/semantics.json").read_text(encoding="utf-8"))
+        _, manifest = _get(self.port, "/ocp/manifest")
+        packs = [pack for capability in manifest["query_capabilities"] for pack in capability["query_packs"]]
+        self.assertEqual([(pack["pack_id"], pack["query_modes"]) for pack in packs],
+                         [(fixture["node_capability"]["query_pack"], fixture["node_capability"]["query_modes"])])
+        filters = [field["name"][len("filters."):] for capability in manifest["query_capabilities"]
+                   for field in capability.get("input_fields", []) if field["name"].startswith("filters.")]
+        self.assertEqual(filters, fixture["node_capability"]["filter_fields"])
+        for example in fixture["cases"]:
+            with self.subTest(example=example["name"]):
+                # Capability rejection must not be confused with invalid JSON/types.
+                server._query_request(example["body"])
+                self.assert_query_case(example)
+
+    def assert_query_case(self, example: dict) -> None:
+        raw = example.get("raw_body", json.dumps(example.get("body")))
+        status, result = _post_raw(self.port, "/ocp/query", raw)
+        self.assertEqual(status, example["status"])
+        if status == 400:
+            self.assertEqual(result["error"]["code"], "invalid_request")
+            self.assertIsInstance(result["error"]["message"], str)
+            self.assertTrue(result["error"]["message"])
+            if "error_message" in example:
+                self.assertEqual(result["error"]["message"], example["error_message"])
+        else:
+            self.assertLessEqual(REQUIRED["query"], set(result))
+            self.assertIsInstance(result["query"], str)
+            self.assertEqual(result["query_pack"], "ocp.query.keyword.v1")
+            self.assertEqual(result["query_mode"], "keyword")
+            self.assertEqual(result["result_count"], example["result_count"])
+            self.assertEqual(result["page"]["limit"], example["page_limit"])
+            self.assertEqual(result["page"]["offset"], 0)
+            self.assertIsInstance(result["page"]["has_more"], bool)
+            if "entry_ids" in example:
+                self.assertEqual([item["entry"]["entry_id"] for item in result["entries"]], example["entry_ids"])
 
     def test_resolve(self) -> None:
         status, body = _post(self.port, "/ocp/resolve", {"entry_id": "entry_example_inmemory_sku-001"})

@@ -8,7 +8,7 @@ the way out.
 **This is a demo application, not an OCP Catalog protocol capability.** The payment
 is a local simulation with no provider behind it, and caller identity is a header
 the caller writes itself. See [CONTRACT.md](../../docs/coffee-merchant/CONTRACT.md)
-for the common `0.1.0` wire contract. A and B are now maintained together by the
+for the common `0.2.0` wire contract. A and B are now maintained together by the
 project maintainer. This is a local integration candidate pending the user's
 review; it has not been merged into `main` or pushed. Historical handoff files
 describe the earlier collaboration.
@@ -51,6 +51,7 @@ whether the problem is configuration or the socket.
 | GET | `/.well-known/ocp-catalog` | discovery; the only URL a caller knows in advance |
 | GET | `/ocp/manifest` | declares only the filters actually implemented |
 | GET | `/ocp/health` | |
+| GET | `/products/:entry_id` | read-only product page advertised by Resolve; current price, stock and fees |
 | POST | `/ocp/query` | `filters` is a strict, closed set |
 | POST | `/ocp/resolve` | where the caller picks up the checkout entry point |
 | POST | `/commerce/v1/quotes` | final price including fees, plus `terms_hash` |
@@ -81,9 +82,19 @@ header; and the query `filters` set is closed.
 Bun loads `.env` from the working directory, so these are read from this
 directory when the server is started through this package.
 
+`MERCHANT_PUBLIC_BASE_URL` must be a complete HTTP(S) origin: no credentials,
+path prefix, query or fragment. Bad addresses fail during `--check` and startup.
+Only `in_stock` and `low_stock` items may be quoted and purchased. `preorder` and
+`unknown` can be displayed in the catalog but do not pass `in_stock_only=true`.
+
 ## Persistent inventory and upgrades
 
-The SQLite schema version is **2**; the wire contract remains **0.1.0**. Startup
+The SQLite schema version is **3**; the wire contract is **0.2.0**. Startup migrates
+v2 reservations to one row per purchase attempt and product, retaining pending
+reservations and historical inventory. Quotes can contain multiple products; all
+lines reserve and settle in one transaction. Delivery requires recipient, phone
+and address and charges the largest selected product delivery fee once per order.
+Delivery and payment remain local simulations. Startup
 adds the inventory, reservation and legacy shortage tables to an existing v1
 store. The first inventory seed imports its confirmed and pending attempts;
 subsequent starts retain available stock. Checkout conditionally reserves stock

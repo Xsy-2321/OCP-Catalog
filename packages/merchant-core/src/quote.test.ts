@@ -29,6 +29,7 @@ import { TEST_NOW_MS, makeTempDatabasePath, makeTestConfig, openTestDb } from '.
 
 const CATALOG = loadCatalog(CATALOG_SEED);
 const CONFIG = makeTestConfig();
+const DELIVERY = { recipient: '测试收件人', phone: '13800138000', address: '杭州市西湖区测试路1号' };
 
 function record(entryId: string): CatalogEntryRecord {
   const found = findEntry(CATALOG, entryId);
@@ -38,7 +39,7 @@ function record(entryId: string): CatalogEntryRecord {
 
 function price(
   entryId: string,
-  overrides: Partial<CreateQuoteRequest> = {},
+  overrides: Partial<Extract<CreateQuoteRequest, { entry_id: string }>> = {},
   nowMs = TEST_NOW_MS,
 ): Quote {
   const request: CreateQuoteRequest = {
@@ -61,6 +62,39 @@ function commerceErrorFrom(work: () => unknown): CommerceError {
 }
 
 describe('buildQuote', () => {
+  test('prices a mixed basket and charges the largest delivery fee once for the order', () => {
+    const americano = record('entry_americano');
+    const higherFee = { ...americano, attributes: { ...americano.attributes,
+      fulfillment: { ...americano.attributes.fulfillment, delivery_fee_minor: 700 } } };
+    const quote = buildQuote([record('entry_latte'), higherFee], {
+      items: [{ entry_id: 'entry_latte', quantity: 2 }, { entry_id: 'entry_americano', quantity: 3 }],
+      fulfillment: { method: 'delivery', delivery: DELIVERY },
+    }, { config: CONFIG, nowMs: TEST_NOW_MS });
+    expect(quote.items.map(item => item.line_total_minor)).toEqual([5000, 2970]);
+    expect(quote.subtotal_minor).toBe(7970);
+    expect(quote.fees).toEqual([{ code: 'delivery', label: '配送费', amount_minor: 700 }]);
+    expect(quote.total_minor).toBe(8670);
+    expect(quote.fulfillment.delivery).toEqual(DELIVERY);
+    expect(quoteInconsistency(quote)).toBeNull();
+  });
+  test('rejects a mixed quote if any item lacks stock or the requested fulfillment', () => {
+    for (const [entryId, code] of [['entry_soldout', 'out_of_stock'], ['entry_gift_box', 'invalid_request']] as const) {
+      const error = commerceErrorFrom(() => buildQuote([record('entry_latte'), record(entryId)], {
+        items: [{ entry_id: 'entry_latte', quantity: 1 }, { entry_id: entryId, quantity: 1 }],
+        fulfillment: { method: entryId === 'entry_soldout' ? 'pickup' : 'delivery',
+          ...(entryId === 'entry_gift_box' ? { delivery: DELIVERY } : {}) },
+      }, { config: CONFIG, nowMs: TEST_NOW_MS }));
+      expect(error.code).toBe(code);
+      expect(error.details?.entry_id).toBe(entryId);
+    }
+  });
+  test('new delivery quotes require an address and the terms hash covers that address', () => {
+    expect(commerceErrorFrom(() => price('entry_latte', { fulfillment: { method: 'delivery' } })).code).toBe('invalid_request');
+    const quote = price('entry_latte', { fulfillment: { method: 'delivery', delivery: DELIVERY } });
+    const changed = { ...quote, fulfillment: { ...quote.fulfillment,
+      delivery: { ...DELIVERY, address: '杭州市西湖区测试路2号' } } };
+    expect(computeQuoteTermsHash(changed)).not.toBe(quote.terms_hash);
+  });
   test('rejects multiplication that overflows integer minor units', () => {
     const base = record('entry_latte');
     const enormous: CatalogEntryRecord = {
@@ -89,7 +123,7 @@ describe('buildQuote', () => {
   test('adds the delivery fee to the total, not beside it', () => {
     // ¥25 + ¥5 delivery is ¥30. A budget check against the item price would call
     // this affordable and then charge more at the till.
-    const quote = price('entry_latte', { fulfillment: { method: 'delivery' } });
+    const quote = price('entry_latte', { fulfillment: { method: 'delivery', delivery: DELIVERY } });
 
     expect(quote.subtotal_minor).toBe(2500);
     expect(quote.fees).toEqual([{ code: 'delivery', label: '配送费', amount_minor: 500 }]);
@@ -112,14 +146,14 @@ describe('buildQuote', () => {
   });
 
   test('refuses a fulfillment method the entry does not offer', () => {
-    // The americano is pickup-only. Offering delivery would be a price the
+    // The gift box is pickup-only. Offering delivery would be a price the
     // merchant cannot honour.
     const error = commerceErrorFrom(() =>
-      price('entry_americano', { fulfillment: { method: 'delivery' } }),
+      price('entry_gift_box', { fulfillment: { method: 'delivery', delivery: DELIVERY } }),
     );
 
     expect(error.code).toBe('invalid_request');
-    expect(error.details?.entry_id).toBe('entry_americano');
+    expect(error.details?.entry_id).toBe('entry_gift_box');
   });
 
   test('refuses a fulfillment location the merchant does not run', () => {
@@ -183,7 +217,7 @@ describe('terms_hash', () => {
 
   test('changes when the total changes', () => {
     const pickup = price('entry_latte');
-    const delivery = price('entry_latte', { fulfillment: { method: 'delivery' } });
+    const delivery = price('entry_latte', { fulfillment: { method: 'delivery', delivery: DELIVERY } });
 
     expect(delivery.terms_hash).not.toBe(pickup.terms_hash);
   });
@@ -207,7 +241,7 @@ describe('terms_hash', () => {
   });
 
   test('covers the fees, not just the items', () => {
-    const quote = price('entry_latte', { fulfillment: { method: 'delivery' } });
+    const quote = price('entry_latte', { fulfillment: { method: 'delivery', delivery: DELIVERY } });
     const withoutFee = { ...quote, fees: [], total_minor: quote.subtotal_minor };
 
     // Same total-minus-fee, but a different set of charges: the hash must move,

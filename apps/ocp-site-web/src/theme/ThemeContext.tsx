@@ -6,12 +6,7 @@ import {
   type ReactNode,
 } from 'react';
 import { DEFAULT_THEME, type Theme } from './theme';
-
-interface ThemeContextValue {
-  theme: Theme;
-}
-
-const ThemeContext = createContext<ThemeContextValue | null>(null);
+import { ThemeContext } from './useTheme';
 
 const THEME_COLORS: Record<Theme, string> = {
   light: '#f6f7f2',
@@ -47,14 +42,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 }
 
 const ThemeSetterContext = createContext<((theme: Theme) => void) | null>(null);
-
-export function useTheme(): ThemeContextValue {
-  const ctx = useContext(ThemeContext);
-  if (!ctx) {
-    throw new Error('useTheme must be used within a ThemeProvider');
-  }
-  return ctx;
-}
 
 /**
  * 由声明非默认主题的页面在其顶层渲染（如营销页 <PageTheme theme="dark" />）。

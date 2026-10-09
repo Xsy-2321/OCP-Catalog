@@ -30,3 +30,5 @@ export * from './order';
 export * from './intent';
 export * from './catalog';
 export * from './http';
+export * from './views';
+export * from './session-rules';

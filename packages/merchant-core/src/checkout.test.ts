@@ -56,6 +56,7 @@ import { manualClock, type Clock } from './clock';
 const CALLER = 'user_demo_1';
 const OTHER_CALLER = 'caller_b';
 const TEST_DEADLINE_MS = 5_000;
+const DELIVERY = { recipient: '测试收件人', phone: '13800138000', address: '杭州市西湖区测试路1号' };
 
 /* ------------------------------------------------------------------ harness */
 
@@ -149,7 +150,7 @@ function freshQuote(ctx: MerchantContext, options: QuoteOptions = {}): Quote {
     {
       entry_id: entryId,
       quantity: options.quantity ?? 1,
-      fulfillment: { method: options.method ?? 'pickup' },
+      fulfillment: { method: options.method ?? 'pickup', ...(options.method === 'delivery' ? { delivery: DELIVERY } : {}) },
     },
     { config: ctx.config, nowMs: options.nowMs ?? ctx.clock.nowMs() },
   );
@@ -525,6 +526,111 @@ describe('a checkout that must be refused', () => {
 
 /* -------------------------------------------------------------- idempotency */
 
+function mixedQuote(ctx: MerchantContext, delivery = false): Quote {
+  const quote = buildQuote(ctx.catalog, {
+    items: [{ entry_id: 'entry_latte', quantity: 1 }, { entry_id: 'entry_americano', quantity: 2 }],
+    fulfillment: { method: delivery ? 'delivery' : 'pickup', ...(delivery ? { delivery: DELIVERY } : {}) },
+  }, { config: ctx.config, nowMs: ctx.clock.nowMs() });
+  insertQuote(ctx.db, quote, CALLER);
+  return quote;
+}
+
+describe('atomic mixed basket checkout', () => {
+  test('a mixed delivery order buys all lines once and retains the signed delivery details', async () => {
+    await withMerchant({}, async ({ ctx, db }) => {
+      const quote = mixedQuote(ctx, true);
+      const body = checkoutBody(quote, 'att_basket_race');
+      const results = await Promise.all(Array.from({ length: 4 }, async () => checkout(ctx, body)));
+      const orders = results.map(confirmedOrder);
+      expect(new Set(orders.map(order => order.order_id)).size).toBe(1);
+      expect(orders[0]!.items).toEqual(quote.items);
+      expect(orders[0]!.total_minor).toBe(4980);
+      expect(orders[0]!.fulfillment.delivery).toEqual(DELIVERY);
+      expect(countPayments(db)).toBe(1);
+      expect(countOrders(db)).toBe(1);
+      const stock = db.query<{ entry_id: string; available_quantity: number }, []>(
+        "SELECT entry_id, available_quantity FROM inventory WHERE entry_id IN ('entry_latte', 'entry_americano') ORDER BY entry_id").all();
+      expect(stock).toEqual([{ entry_id: 'entry_americano', available_quantity: 28 }, { entry_id: 'entry_latte', available_quantity: 11 }]);
+      const eventText = JSON.stringify(listEvents(db, quote.quote_id)) + JSON.stringify(listEvents(db, 'att_basket_race'));
+      expect(eventText).not.toContain(DELIVERY.phone);
+      expect(eventText).not.toContain(DELIVERY.address);
+    });
+  });
+  test('the last line being unavailable leaves every stock row and payment untouched', () => {
+    withMerchant({}, ({ ctx, db }) => {
+      const quote = mixedQuote(ctx);
+      db.query("UPDATE inventory SET available_quantity = 0, availability_status = 'out_of_stock' WHERE entry_id = 'entry_americano'").run();
+      const error = thrown(() => checkout(ctx, checkoutBody(quote, 'att_basket_stock')));
+      expect(error.code).toBe('out_of_stock');
+      expect(db.query<{ available_quantity: number }, []>("SELECT available_quantity FROM inventory WHERE entry_id = 'entry_latte'").get()!.available_quantity).toBe(12);
+      expect(db.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM inventory_reservations').get()!.count).toBe(0);
+      expect(countPayments(db)).toBe(0);
+      expect(countOrders(db)).toBe(0);
+    });
+  });
+  test('a declined payment releases every line and its duplicate remains one failed payment', () => {
+    withMerchant({ faults: ['payment_declined'] }, ({ ctx, db }) => {
+      const body = checkoutBody(mixedQuote(ctx), 'att_basket_decline');
+      expect(checkout(ctx, body).kind).toBe('declined');
+      expect(checkout(ctx, body).kind).toBe('declined');
+      expect(db.query<{ state: string }, []>('SELECT state FROM inventory_reservations ORDER BY entry_id').all())
+        .toEqual([{ state: 'released' }, { state: 'released' }]);
+      expect(db.query<{ available_quantity: number }, []>("SELECT available_quantity FROM inventory WHERE entry_id = 'entry_latte'").get()!.available_quantity).toBe(12);
+      expect(db.query<{ available_quantity: number }, []>("SELECT available_quantity FROM inventory WHERE entry_id = 'entry_americano'").get()!.available_quantity).toBe(30);
+      expect(countPayments(db)).toBe(1);
+      expect(countOrders(db)).toBe(0);
+    });
+  });
+  test('pending mixed baskets survive restart and settle all lines without another payment', () => {
+    withMerchant({ faults: ['payment_timeout_then_succeed'] }, merchant => {
+      const quote = mixedQuote(merchant.ctx, true);
+      expect(checkout(merchant.ctx, checkoutBody(quote, 'att_basket_pending')).kind).toBe('processing');
+      merchant.restart();
+      const attempt = settlePendingAttempt(merchant.ctx, 'att_basket_pending', CALLER);
+      const order = requireOwnedOrder(merchant.db, attempt.order_id!, CALLER);
+      expect(order.items).toEqual(quote.items);
+      expect(order.fulfillment.delivery).toEqual(DELIVERY);
+      expect(settlePendingAttempt(merchant.ctx, 'att_basket_pending', CALLER).order_id).toBe(order.order_id);
+      expect(countPayments(merchant.db)).toBe(1);
+      expect(countOrders(merchant.db)).toBe(1);
+    });
+  });
+  test('a lost mixed-order response recovers the original order after restart', () => {
+    withMerchant({ faults: ['response_dropped_after_settlement'] }, merchant => {
+      const quote = mixedQuote(merchant.ctx);
+      const body = checkoutBody(quote, 'att_basket_drop');
+      let orderId = '';
+      try { checkout(merchant.ctx, body); } catch (error) {
+        if (!(error instanceof SimulatedResponseLoss)) throw error;
+        orderId = error.orderId;
+      }
+      expect(orderId).not.toBe('');
+      merchant.restart();
+      expect(settlePendingAttempt(merchant.ctx, 'att_basket_drop', CALLER).order_id).toBe(orderId);
+      expect(requireOwnedOrder(merchant.db, orderId, CALLER).items).toEqual(quote.items);
+      expect(countPayments(merchant.db)).toBe(1);
+      expect(countOrders(merchant.db)).toBe(1);
+    });
+  });
+  test('a price or fulfillment change in the second line blocks the entire checkout', () => {
+    for (const mutation of ['price', 'fulfillment', 'fee'] as const) {
+      withMerchant({}, ({ ctx, db }) => {
+        const quote = mixedQuote(ctx, true);
+        const changed = ctx.catalog.map(record => record.entry.entry_id === 'entry_americano' ? { ...record, attributes: {
+          ...record.attributes,
+          ...(mutation === 'price' ? { price_minor: record.attributes.price_minor + 100 } : {}),
+          ...(mutation === 'fulfillment' ? { fulfillment: { methods: ['pickup'] as ('pickup' | 'delivery')[] } } : {}),
+          ...(mutation === 'fee' ? { fulfillment: { ...record.attributes.fulfillment, delivery_fee_minor: 800 } } : {}),
+        } } : record);
+        const error = thrown(() => checkout({ ...ctx, catalog: changed }, checkoutBody(quote, `att_basket_${mutation}`)));
+        expect(error.code).toBe('requote_required');
+        expect(countPayments(db)).toBe(0);
+        expect(countOrders(db)).toBe(0);
+      });
+    }
+  });
+});
+
 describe('one purchase, however many times it is asked for', () => {
   test('a sequential retry replays the original order instead of buying again', () => {
     withMerchant({}, ({ ctx, db }) => {
@@ -781,8 +887,8 @@ describe('the checkout deadline', () => {
   /**
    * A clock that jumps forward after its first reading.
    *
-   * `runCheckout` reads the clock exactly twice: once to stamp the start and once
-   * to check its own deadline. So this makes an overrun happen on demand instead
+   * The first read stamps the start; the read after acquiring the write lock
+   * and the deadline read see the elapsed time. This makes an overrun happen instead
    * of by being genuinely slow — the fault is otherwise only reachable by a stall
    * nobody can reproduce in a test.
    *

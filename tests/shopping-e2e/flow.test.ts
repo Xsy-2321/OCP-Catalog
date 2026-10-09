@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createMockRuntime, type PublicSession } from '../../packages/agent-runtime/src';
+import { createMockRuntime, SHOPPING_CONTRACT_VERSION, type PublicSession } from '../../packages/agent-runtime/src';
 import { acquireDataLock, createHandler } from '../../apps/shopping-agent-api/src/server';
 
 let directory: string;
@@ -34,10 +34,12 @@ describe('A-only local HTTP E2E (not B integration)', () => {
   test('serves Chinese UI and explicitly reports mock payment, shared contract and missing LLM', async () => {
     const config = await (await call('/api/config')).json();
     expect(config).toEqual({ mode: 'mock', merchant_id: 'coffee-demo', payment_mode: 'local_simulated',
-      c0_status: 'integrated', contract_version: '0.1.0', llm_status: 'not_configured' });
+      c0_status: 'integrated', contract_version: SHOPPING_CONTRACT_VERSION, llm_status: 'not_configured', llm_model: null,
+      merchant_health: { status: 'mock', message: '独立本地样例模式', checked_at: expect.any(String) } });
+    expect(Number.isFinite(Date.parse(config.merchant_health.checked_at))).toBe(true);
     const response = await call('/');
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain('本地模拟付款');
+    expect(await response.text()).toContain('本地演示 · 模拟付款 · 用户逐笔确认');
     expect(response.headers.get('content-security-policy')).toContain("script-src 'self'");
     expect((await call('/app.js')).status).toBe(200);
     expect((await call('/styles.css')).status).toBe(200);

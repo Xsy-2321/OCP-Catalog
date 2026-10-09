@@ -23,6 +23,7 @@ import {
   IDEMPOTENCY_KEY_HEADER,
   checkoutRequestSchema,
   createQuoteRequestSchema,
+  quoteRequestItems,
   orderResponseSchema,
   type Order,
   type Quote,
@@ -51,6 +52,7 @@ import {
 import { requireOwnedOrder } from './orders';
 import { buildQuote, insertQuote } from './quote';
 import type { CatalogEntryRecord } from './catalog';
+import { productPage } from './product-page';
 
 const MAX_CALLER_ID_LENGTH = 128;
 
@@ -147,13 +149,16 @@ function handleCreateQuote(ctx: MerchantContext, rawBody: unknown, request: Requ
     throw new CommerceError('invalid_request', `invalid quote request: ${parsed.error.message}`);
   }
 
-  const record = findEntry(catalogWithInventory(ctx), parsed.data.entry_id);
-  if (record === null) {
-    throw new CommerceError('not_found', `unknown entry_id: ${parsed.data.entry_id}`);
-  }
+  const catalog = catalogWithInventory(ctx);
+  const items = quoteRequestItems(parsed.data);
+  const records = items.map(item => {
+    const record = findEntry(catalog, item.entry_id);
+    if (record === null) throw new CommerceError('not_found', `unknown entry_id: ${item.entry_id}`);
+    return record;
+  });
 
   const nowMs = ctx.clock.nowMs();
-  const quote: Quote = buildQuote(record, parsed.data, { config: ctx.config, nowMs });
+  const quote: Quote = buildQuote(records, parsed.data, { config: ctx.config, nowMs });
   insertQuote(ctx.db, quote, callerId);
   recordEvent(ctx.db, {
     subjectType: 'quote',
@@ -161,8 +166,7 @@ function handleCreateQuote(ctx: MerchantContext, rawBody: unknown, request: Requ
     type: 'quote.created',
     nowMs,
     data: {
-      entry_id: parsed.data.entry_id,
-      quantity: parsed.data.quantity,
+      items,
       total_minor: quote.total_minor,
       currency: quote.currency,
     },
@@ -246,6 +250,14 @@ async function route(
   if (method === 'GET' && pathname === '/.well-known/ocp-catalog') return handleDiscovery(ctx);
   if (method === 'GET' && pathname === '/ocp/manifest') return handleManifest(ctx);
   if (method === 'GET' && pathname === '/ocp/health') return handleHealth(ctx);
+  if (method === 'GET' && pathname.startsWith('/products/')) {
+    let entryId: string;
+    try { entryId = decodeURIComponent(pathname.slice('/products/'.length)); }
+    catch { throw new CommerceError('invalid_request', 'invalid product URL'); }
+    const record = findEntry(catalogWithInventory(ctx), entryId);
+    if (record === null) throw new CommerceError('not_found', `unknown entry_id: ${entryId}`);
+    return productPage(record);
+  }
   if (method === 'POST' && pathname === '/ocp/query') return handleQuery(ctx, await readJson(request));
   if (method === 'POST' && pathname === '/ocp/resolve') return handleResolve(ctx, await readJson(request));
 

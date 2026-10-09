@@ -30,11 +30,11 @@
     "access": "public"
   },
   "scripts": {
-    "prepack": "bun ../../scripts/sync-skill-copies.ts",
-    "prepublishOnly": "bun ../../scripts/sync-skill-copies.ts",
-    "build": "bun ../../scripts/sync-skill-copies.ts",
-    "typecheck": "node --check bin/ocp-skill.mjs",
-    "lint": "node --check bin/ocp-skill.mjs",
+    "prepack": "bun ../../scripts/sync-skill-copies.ts && node scripts/sync-core.mjs",
+    "prepublishOnly": "bun ../../scripts/sync-skill-copies.ts && node scripts/sync-core.mjs",
+    "build": "bun ../../scripts/sync-skill-copies.ts && node scripts/sync-core.mjs",
+    "typecheck": "node --check bin/ocp-skill.mjs && node --check bin/installer-core.mjs && node scripts/sync-core.mjs --check",
+    "lint": "node --check bin/ocp-skill.mjs && node --check bin/installer-core.mjs && node scripts/sync-core.mjs --check",
     "test": "bun test --pass-with-no-tests"
   }
 }

@@ -148,8 +148,17 @@ export function validateCatalogQueryRequest(
 
   const requestedQueryMode = requestedQueryModeFromRequest(request);
   const queryMode = requestedQueryMode ?? inferBaseQueryMode(request.query ?? '', request.filters ?? {});
-  const selectedDescriptor = requestedDescriptor
-    ?? descriptors.find((descriptor) => descriptor.query_modes.includes(queryMode));
+  const filterFields = Object.entries(request.filters ?? {})
+    .filter(([, value]) => value !== undefined)
+    .map(([field]) => field)
+    .sort();
+  const eligibleDescriptors = descriptors.filter(descriptor =>
+    (!request.query_pack || descriptor.pack_id === request.query_pack) && descriptor.query_modes.includes(queryMode));
+  // A request must fit one capability. Taking the union of all input_fields
+  // would claim that a selected pack supports another capability's filters.
+  const selectedDescriptor = eligibleDescriptors.find(descriptor =>
+    filterFields.every(field => descriptor.filter_fields.includes(field)))
+    ?? eligibleDescriptors[0] ?? requestedDescriptor;
 
   if (!selectedDescriptor) {
     if (descriptors.length === 0) {
@@ -188,14 +197,8 @@ export function validateCatalogQueryRequest(
     });
   }
 
-  const filterFields = Object.entries(request.filters ?? {})
-    .filter(([, value]) => value !== undefined && value !== false)
-    .map(([field]) => field)
-    .sort();
-  const supportedFilterFields = manifestSupportedFilterFields(manifest);
-  const rejectedFilters = supportedFilterFields.length === 0
-    ? []
-    : filterFields.filter((field) => !supportedFilterFields.includes(field));
+  const supportedFilterFields = selectedDescriptor.filter_fields;
+  const rejectedFilters = filterFields.filter((field) => !supportedFilterFields.includes(field));
 
   if (rejectedFilters.length > 0) {
     throw new OcpClientValidationError(`unsupported filter fields: ${rejectedFilters.join(', ')}`, {
@@ -372,6 +375,9 @@ export class OcpClient {
         ...init,
         headers,
         signal: controller.signal,
+        // Credentials belong to the URL chosen by the caller. Never forward
+        // API keys, trace headers, or request bodies to a redirect target.
+        redirect: 'error',
       });
       statusCode = response.status;
       const text = await response.text();
@@ -480,24 +486,19 @@ function manifestQueryPackDescriptors(manifest: CatalogManifest) {
       pack_id: pack.pack_id,
       query_modes: pack.query_modes,
       supports_explain: capability.supports_explain,
+      filter_fields: unique(capability.input_fields
+        .map(field => field.name)
+        .filter((name): name is string => typeof name === 'string' && name.startsWith('filters.'))
+        .map(name => name.slice('filters.'.length))),
     }))
   ));
-}
-
-function manifestSupportedFilterFields(manifest: CatalogManifest) {
-  return unique(manifest.query_capabilities.flatMap((capability) => (
-    capability.input_fields
-      .map((field) => typeof field.name === 'string' ? field.name : null)
-      .filter((name): name is string => Boolean(name?.startsWith('filters.')))
-      .map((name) => name.replace(/^filters\./, ''))
-  )));
 }
 
 type QueryMode = 'keyword' | 'filter' | 'semantic' | 'hybrid';
 
 function inferBaseQueryMode(query: string, filters: Record<string, unknown>): QueryMode {
   const hasQuery = query.trim().length > 0;
-  const hasFilters = Object.values(filters).some(Boolean);
+  const hasFilters = Object.values(filters).some(value => value !== undefined);
   if (hasQuery && hasFilters) return 'hybrid';
   if (hasFilters) return 'filter';
   if (!hasQuery) return 'filter';
@@ -617,6 +618,7 @@ async function sendActivityEvent(activity: OcpClientActivityOptions, event: OcpA
       headers,
       body: JSON.stringify(event),
       signal: controller.signal,
+      redirect: 'error',
     });
   } finally {
     clearTimeout(timeout);

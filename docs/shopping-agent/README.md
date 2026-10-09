@@ -1,8 +1,91 @@
-# 本地购物助手
+# 一杯之间：购物应用
 
-项目由用户独立维护。默认主运行路径为本地 **HTTP**：A 页面/API 通过 OCP 搜索与 Resolve 访问 B Coffee API，在用户明确确认后签发共同 Ed25519 授权。B 使用持久 SQLite 保存库存、购买尝试、模拟支付、订单及幂等结果。付款仍为本地模拟；真实 LLM 尚未配置。
+项目由用户独立维护。主运行路径为本地 **HTTP**：A 页面/API 通过 OCP 搜索与 Resolve 访问 B Coffee API，在用户明确确认后签发共同 Ed25519 授权。B 使用持久 SQLite 保存库存、购买尝试、模拟支付、订单及幂等结果。付款为本地模拟。Agent 模式已接入 DeepSeek 兼容 API 和真实工具循环，密钥默认留空。
 
-## 启动
+## 一条命令启动
+
+使用 **Bun 1.3.13**，在仓库根目录执行：
+
+```powershell
+bun install --frozen-lockfile
+# 第一次配置时复制；已有 .env 就直接编辑，避免覆盖。
+Copy-Item .env.example .env
+bun run shopping:demo:check
+bun run shopping:demo
+```
+
+打开 http://127.0.0.1:4310。统一启动器运行 A/B，自动生成并保留本地签名密钥，数据默认位于 `.codex-tmp/shopping-demo`。普通重启保持库存、会话与订单；`bun run shopping:demo --new-session` 创建独立排练目录并保留原资料。新目录不能作为旧未知购买失败的证据。停止使用 Ctrl+C。
+
+关闭会等待请求和底层会话写入结束，再停止商家并释放目录锁；即使 Agent 已返回超时，也会等待后台取消清理落盘。
+
+A 会话默认保存在 `agent/sessions/sessions.sqlite`，按用户和待处理状态索引。首次打开旧 JSON 目录会一次性事务导入，并保留原 JSON 作为迁移快照；迁移后 SQLite 是会话事实来源，旧 JSON 不会在重启时覆盖新状态。损坏记录或迁移后数据库缺失会停止操作，不能据此认定未知购买失败。回滚运行程序前应同时保存整个数据目录，并使用迁移前备份，避免旧版程序读取过时快照。
+
+## 用户端和商家端的本地预览
+
+在仓库根目录运行：
+
+```powershell
+bun run shopping:preview
+```
+
+本机默认 `bun` 当前是 1.4.2，本轮验收用的是项目内现成的 1.3.13。若未切换全局版本，可在当前项目目录直接复制以下命令启动同一个预览器：
+
+```powershell
+& '.\.codex-tmp\integration\runtime\1.3.13\bun-windows-x64\bun.exe' --no-env-file scripts/shopping-preview.ts
+```
+
+此命令由启动器读取已有 `.env`，不会覆盖密钥。恢复时设置 `SHOPPING_PREVIEW_DATA_DIR` 后再次使用相同命令。
+
+它沿用统一 A/B 启动器，自动选取两个空闲端口，并在 `.codex-tmp/shopping-dual-preview/run-*` 新建这一轮的独立数据目录。终端会给出三个可直接打开的网址：**演示门户、用户演示入口、商家演示入口**。两个页面位于同一网址下，分别是 `/` 与 `/merchant`；后台仍在电脑本机运行。不需要部署服务器，也不会清空或替换原 `.codex-tmp/shopping-demo` 的数据、签名或未决购买记录。
+
+首次打开门户 `/demo`，分别在两个标签页打开用户和商家入口。用户沿用现有购物身份；商家入口另发一个仅用于本地只读演示的身份标记，不会更换用户身份。这不是正式的账号注册或登录，任何能访问这台电脑本地网址的人都能进入演示商家页。页面及接口限于 `127.0.0.1`，只适用于本机预览，不用于公开经营。
+
+商家页展示当前商家的商品名称、价格、库存、履约方式和配送费，以及订单商品、数量、费用、配送资料、付款与履约状态。商品信息来自已有商家服务目录，库存和订单来自该服务已打开的 SQLite；历史订单按当时保存的内容展示。确认购买前只有报价，不产生订单；用户确认后，点击商家页“刷新数据”可看到新订单和库存减少。付款成功显示“模拟已付款”，履约仍为“待履约（模拟）”，不会自动显示已送达。订单列表不展示电话和地址，打开详情后才显示。
+
+商家接口只接受读取请求，不能编辑商品、补库存、接单、退款或推进付款恢复。商家刷新也不会替用户查询或结算未决购买；用户仍需在原用户身份下恢复原购买。完整登录、店员权限和真实物流留到后续。
+
+Ctrl+C 停止后，恢复**同一轮**预览需保留目录、原签名、浏览器用户标记及端口。把启动时输出的路径代入：
+
+```powershell
+$env:SHOPPING_PREVIEW_DATA_DIR='E:\OCP-Catalog\.codex-tmp\shopping-dual-preview\run-实际目录'
+bun run shopping:preview
+```
+
+恢复会读取该目录的 `preview.json` 并使用原来的两个端口；端口被占用或原数据、签名、会话绑定文件缺失时停止，不自动换端口或重建空数据。若要开始另一轮独立演示：
+
+```powershell
+Remove-Item Env:SHOPPING_PREVIEW_DATA_DIR -ErrorAction SilentlyContinue
+bun run shopping:preview
+```
+
+现有 `bun run shopping:demo` 同样增加 `/demo` 和 `/merchant` 入口，默认仍用 4310/8787 和原数据目录；只有新命令 `shopping:preview` 默认选择新目录及空闲端口。分开启动的 `shopping:start` 没有商家读取能力，页面会隐藏双端导航。
+
+本轮**无需数据库迁移**，继续使用 SQLite schema 3，没有新增表或更改交易字段。商家页只读取现有数据；启动器保留既有旧库升级机制，不能把启动旧库当作纯只读操作。新命令默认创建独立库，验收也只使用独立库。后端沿用已有 `.env` 模型配置，启动不会调用模型；自动验收使用本地协议 fixture，不消耗真实模型额度。
+
+`--new-session` 会输出此次数据目录。要继续这一轮排练，设置 `SHOPPING_DEMO_DATA_DIR` 为输出目录，再正常启动；再次使用 `--new-session` 会创建另一个独立目录。
+
+## 模型密钥配置
+
+根 `.env` 的入口如下，密钥只由后端读取：
+
+```dotenv
+DEEPSEEK_API_KEY=
+SHOPPING_LLM_BASE_URL=https://api.deepseek.com
+SHOPPING_LLM_MODEL=deepseek-flash
+SHOPPING_LLM_TIMEOUT_MS=30000
+```
+
+`deepseek-flash` 对应 DeepSeek V4.1 Flash，依据 [官方发布说明](https://api-docs.deepseek.com/news/news260910/)。调用格式参考 [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/)；使用非思考模式。其他 OpenAI 兼容网关可修改 base URL 和模型名。
+
+空密钥可使用手动搜索；Agent 明确显示未配置。填入后重启，选择“Agent 规划”。预算是表单硬上限，语言中更低预算可以收紧；语言杯数与表单冲突时要求修改表单。模型只提取需求、搜索和请求报价，不能批准、签名、购买或修改商户。默认每次模型调用30秒，整轮Agent规划包含模型、目录分页和报价的总时限为110秒，最多8个规划工具步骤。超时中止后续搜索与报价，并停用该轮可确认报价；不会中断已经开始的购买或订单恢复。错误、超时或限流不自动重试或回退mock。
+
+支持同一商家的混合商品购物篮与配送：最多 10 行需求、合计 1–20 杯。手动模式勾选“一次购买不同商品”，逐行填写关键词和杯数，在每组候选中选择商品后查看整单报价；Agent 模式可描述“一杯拿铁和一杯美式”，总杯数填 2。配送需在表单选择并填写收件人、电话和详细地址；这些表单信息不发送给模型。拿铁和美式的 demo 配送费为整单 5 元，仅收一次；不支持配送的商品不能选入配送订单。
+
+每笔整单报价展示全部商品与费用，含配送费的总额不得超过预算，确认后才创建一笔模拟订单。任一项缺货时不能部分成交；未知结果只恢复原尝试。更改商品、数量、履约方式或配送信息后必须取得新报价并重新确认。“任选一种、同款多杯”和“不要配送、自取”仍可正常规划。空候选正常停止；报价失败可在原限制内有限改选。推荐金额与操作说明由实际报价和页面状态生成。配送和付款均属于本地演示，不对接真实物流或支付。
+
+常规自动测试使用本地模型协议fixture；本机已使用用户填写的密钥完成真实调用及修复复验，见 [真实LLM问题修复与证据](LLM-TARGETED-FIXES-2026-10-07.md)。其他账号和运行环境需使用自己的密钥验证。
+
+## 分开启动 A/B
 
 使用根 packageManager 固定的 **Bun 1.3.13**：
 
@@ -35,19 +118,30 @@ B 按其 README 生成 trusted-keys.json；双方保持 `agent_a_test` / `agent_
 
 ## 使用与恢复
 
-1. 输入商品关键词、杯数和包含全部收费的人民币总预算。当前流程使用固定关键词检索，页面不提供真实自然语言理解。
+1. 选择手动关键词或 Agent 自然语言，设置各商品杯数和包含全部收费的人民币总预算。Agent 模式需要后端配置模型密钥；支持单商户混合商品、自取及商品声明支持的配送。
 2. 从目录候选取得最终报价；目录筛选后仍复核币种、库存和整数分金额。
 3. 检查条款，明确点击确认才会签发授权和结账。模型说“已批准”和取消操作都不能购买。
 4. 分开查看付款与履约状态。B 的 pending 显示“待履约”；付款成功不表示咖啡开始制作或已经取餐。
 5. 确定拒绝后可选择候选重新报价，旧失败尝试保存到历史，新条款必须重新确认。旧确认或许可不能购买新报价。
 6. 202、响应丢失、5xx、协议/订单校验故障或查询404都保持未知，保留原 attempt/key，并在同一用户的所有会话中锁住新购买、取消及商品替换。刷新和“查询原购买结果”只恢复原尝试。已经收到的合法 confirmed attempt 不会因为后续畸形订单或倒退状态而被当作可重买的失败。
 
-浏览器使用随机 HttpOnly cookie 标识本地用户。A 将同一个后端会话身份作为 B caller 和授权 user；这只是本地开发身份，不能当作生产登录。localStorage 仅保存会话 ID。
+7. “查找未决购买”按当前身份从后端找到原会话，跨标签页或localStorage指针变化后仍能恢复。旧成功订单不能替代未决购买指针。
+8. 刷新还原会话的预算、杯数和关键词；改变输入只是新需求草稿，会停用旧报价确认，需重新提交或重新报价。A重启后会重新向受信目录验证旧候选；商品移除或不再符合库存/预算时要求重新搜索。
+
+浏览器使用随机 HttpOnly/SameSite cookie 标识本地用户，保留30天。A 将同一个后端会话身份作为 B caller 和授权 user；这是本地开发身份，不能当作生产登录。清除cookie或换浏览器不能找回原身份。localStorage只作为便捷指针，未决会话由后端查询。
 
 ## 验证
+
+`bun run test:all` 单次执行完整源码套件；根 `bun run test` 也包含shopping-e2e，不应累加两个重复入口的用例数。GitHub Actions已有构建、类型、lint、完整测试、文档和三语言示例门禁。
 
 `bun run shopping:integration` 运行真实 A HTTP 确认路由 → B 正式 bootstrap socket → 独立 SQLite 的联合测试；shopping:test 同时保留 A 独立 mock 和 transport 边界回归。B 单侧测试包含跨连接/进程库存争抢、异常退出、幂等与旧库迁移。
 
 页面验收可启动 `bun tests/shopping-e2e/browser-http-server.ts`，使用独立 SHOPPING_BROWSER_DATA_DIR。将输出的 A URL 设置为 SHOPPING_PREVIEW_URL，然后执行 `node tests/shopping-e2e/browser-http-check.mjs`。它需要已有 Playwright/Chrome，可设置 SHOPPING_PLAYWRIGHT_PATH 和 SHOPPING_BROWSER_EXE，使用独立无头 context，验证用户确认、真实 B 报价、付款/履约分离以及成交响应丢失后的刷新恢复。证据默认写入 .codex-tmp/integration/browser-evidence。
 
-共同契约版本为0.1.0，共享 schema、authorizationSigningBytes、computeTermsHash 和精确金额函数。仅属于 demo 应用扩展，不修改 OCP 标准。真实 LLM、生产身份、外部支付和生产部署不在本轮范围内。当前完成情况和实际门禁见 [验收报告](../team-development/INTEGRATION-ACCEPTANCE.md)。
+`bun run shopping:browser` 可自动启动隔离A/B并完成浏览器恢复与模型协议验收；支持本机Playwright/Chrome或Codex bundled runtime，缺依赖会给出配置指引。模型fixture与故障控制只存在于测试启动器。
+
+`bun run shopping:merchant:browser` 自动在另一独立目录和空闲端口验收双端页面：混合配送报价、明确确认后商家订单与库存同步、详情、刷新、同目录同端口重启、移动端布局和只读请求。测试控制仅存在于测试启动器，不进入正式页面/API。详细结果及已发现问题见 [双端本地预览验收](MERCHANT-PREVIEW-ACCEPTANCE-2026-10-08.md)。
+
+`bun tests/shopping-e2e/browser-http-server.ts --basket-check` 可自动验收混合配送页面，覆盖完整选择、一次运费、修改商品/地址后重新报价、确认与刷新恢复。
+
+共同契约版本为0.2.0，共享 schema、authorizationSigningBytes、computeTermsHash 和精确金额函数。仅属于 demo 应用扩展，不修改 OCP 标准。真实模型接口已接入且已使用用户密钥验收；生产身份、真实物流、外部支付和生产部署仍未实现。本轮结果见 [混合商品与配送验收](BASKET-DELIVERY-ACCEPTANCE-2026-10-07.md)，上一轮结果见 [修复验收](FIX-ACCEPTANCE.md)，历史整合基线见 [旧验收报告](../team-development/INTEGRATION-ACCEPTANCE.md)。[参赛展示脚本](COMPETITION.md) 给出原创范围、准备和演示场景。

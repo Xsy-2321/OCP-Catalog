@@ -26,6 +26,7 @@ import {
   commerceErrorSchema,
   newOrderId,
   orderSchema,
+  orderInconsistency,
   purchaseAttemptSchema,
   type CommerceErrorPayload,
   type FulfillmentStatus,
@@ -250,17 +251,35 @@ export function insertOrder(db: Database, order: Order, callerId: string): void 
 interface OrderRow {
   order_id: string;
   caller_id: string;
+  merchant_id: string;
+  catalog_id: string;
+  purchase_attempt_id: string;
+  quote_id: string;
+  total_minor: number;
+  created_at_ms: number;
+  updated_at_ms: number;
   order_json: string;
 }
 
 export function getOrderRow(db: Database, orderId: string): OrderRow | null {
   return db
-    .query<OrderRow, [string]>('SELECT order_id, caller_id, order_json FROM orders WHERE order_id = ?')
+    .query<OrderRow, [string]>(`SELECT order_id, caller_id, merchant_id, catalog_id,
+      purchase_attempt_id, quote_id, total_minor, created_at_ms, updated_at_ms, order_json
+      FROM orders WHERE order_id = ?`)
     .get(orderId);
 }
 
 export function parseOrderRow(row: OrderRow): Order {
-  return orderSchema.parse(JSON.parse(row.order_json));
+  const order = orderSchema.parse(JSON.parse(row.order_json));
+  if (order.order_id !== row.order_id || order.merchant_id !== row.merchant_id || order.catalog_id !== row.catalog_id
+    || order.purchase_attempt_id !== row.purchase_attempt_id || order.quote_id !== row.quote_id
+    || order.total_minor !== row.total_minor || Date.parse(order.created_at) !== row.created_at_ms
+    || Date.parse(order.updated_at) !== row.updated_at_ms) {
+    throw new Error('stored order does not match its indexed identity or snapshot');
+  }
+  const problem = orderInconsistency(order);
+  if (problem !== null) throw new Error(`stored order contains inconsistent amounts or terms: ${problem}`);
+  return order;
 }
 
 /** Rewrites a status after a verified change. The order's own fields are authoritative. */

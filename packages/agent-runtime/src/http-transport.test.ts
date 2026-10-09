@@ -22,7 +22,7 @@ const iso = (offset = 0) => new Date(NOW + offset).toISOString();
 const keys = generateKeyPairSync('ed25519');
 const candidate: Candidate = { entry_id: 'entry_latte', catalog_id: 'catalog_coffee_demo', merchant_id: 'merchant_coffee_demo',
   title: '拿铁', description: '本地模拟', search_price_minor: 2500, currency: 'CNY', in_stock: true };
-const intent: Intent = { query: '拿铁', quantity: 1, currency: 'CNY', max_total_minor: 3000,
+const intent: Intent = { query: '拿铁', items: [{ query: '拿铁', quantity: 1 }], quantity: 1, currency: 'CNY', max_total_minor: 3000,
   merchant_id: candidate.merchant_id, fulfillment: 'pickup' };
 const servers: ReturnType<typeof Bun.serve>[] = [];
 afterEach(async () => { for (const server of servers.splice(0)) await server.stop(true); });
@@ -48,6 +48,8 @@ function readQuote(wire = wireQuote()): Quote {
   const item = wire.items[0]!;
   return { quote_id: wire.quote_id, user_id: 'user_one', merchant_id: wire.merchant_id, catalog_id: wire.catalog_id,
     entry_id: item.entry_id, title: item.title, quantity: item.quantity, fulfillment: 'pickup', currency: wire.currency,
+    items: [{ entry_id: item.entry_id, title: item.title, quantity: item.quantity,
+      unit_price_minor: item.unit_minor, line_total_minor: item.line_total_minor }],
     unit_price_minor: item.unit_minor, fees: wire.fees.map(fee => ({ label: fee.label, amount_minor: fee.amount_minor })),
     total_minor: wire.total_minor, terms_hash: wire.terms_hash, expires_at: wire.expires_at, wire_terms: buildQuoteTerms(wire) };
 }
@@ -98,6 +100,70 @@ describe('shared backend Ed25519 issuer', () => {
 });
 
 describe('real HTTP merchant commerce boundary', () => {
+  test('catalog truncation warnings reach the public session and refresh on later searches', async () => {
+    let incomplete = true;
+    let unavailable = false;
+    let pages = 0;
+    const instance = server(request => {
+      const path = new URL(request.url).pathname;
+      if (path === '/.well-known/ocp-catalog') return Response.json({ ocp_version: '1.0', kind: 'WellKnownCatalogDiscovery',
+        catalog_id: candidate.catalog_id, manifest_url: `${instance.origin}/ocp/manifest` });
+      if (path === '/ocp/manifest') {
+        const manifest = structuredClone(manifestFixture);
+        for (const [name, endpoint] of Object.entries(manifest.endpoints)) endpoint.url = `${instance.origin}/ocp/${name}`;
+        return Response.json(manifest);
+      }
+      if (path === '/ocp/query') {
+        if (unavailable) return new Response('unavailable', { status: 503 });
+        pages += 1;
+        return Response.json({ ...queryFixture, page: { ...queryFixture.page, has_more: incomplete,
+          ...(incomplete ? { next_cursor: `page_${pages}` } : {}) } });
+      }
+      return new Response('unknown', { status: 404 });
+    });
+    const directory = await mkdtemp(join(tmpdir(), 'ocp-search-warning-'));
+    try {
+      const store = new FileSessionStore(directory);
+      const coordinator = new ShoppingCoordinator(instance.transport, store, issuer(), instance.origin, () => NOW, [candidate.merchant_id]);
+      const created = await coordinator.create('user_one', intent);
+      const searched = await coordinator.search('user_one', created.id);
+      expect(pages).toBe(50);
+      expect(searched.phase).toBe('candidates');
+      expect(searched.candidates).toHaveLength(1);
+      expect(searched.search_warnings).toEqual(['目录超过 50 页，已停止查询；当前候选不代表全部匹配商品。']);
+      expect((await coordinator.get('user_one', created.id)).search_warnings).toEqual(searched.search_warnings);
+      expect((await store.read(created.id))!.search_warnings).toEqual(searched.search_warnings);
+      expect(searched.attempt).toBeUndefined();
+      incomplete = false;
+      expect((await coordinator.search('user_one', created.id)).search_warnings).toEqual([]);
+      incomplete = true;
+      expect((await coordinator.search('user_one', created.id)).search_warnings).toHaveLength(1);
+      unavailable = true;
+      const failed = await coordinator.search('user_one', created.id);
+      expect(failed.phase).toBe('failed');
+      expect(failed.search_warnings).toEqual([]);
+      expect(instance.requests.every(request => !request.path.startsWith('/commerce/'))).toBe(true);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+  test('transport retains local-filter warnings while its original search API still returns candidates', async () => {
+    const instance = server(request => {
+      const path = new URL(request.url).pathname;
+      if (path === '/.well-known/ocp-catalog') return Response.json({ ocp_version: '1.0', kind: 'WellKnownCatalogDiscovery',
+        catalog_id: candidate.catalog_id, manifest_url: `${instance.origin}/ocp/manifest` });
+      if (path === '/ocp/manifest') {
+        const manifest = structuredClone(manifestFixture);
+        for (const [name, endpoint] of Object.entries(manifest.endpoints)) endpoint.url = `${instance.origin}/ocp/${name}`;
+        manifest.query_capabilities[0]!.input_fields = [];
+        return Response.json(manifest);
+      }
+      if (path === '/ocp/query') return Response.json(queryFixture);
+      return new Response('unknown', { status: 404 });
+    });
+    const result = await instance.transport.searchWithWarnings(intent);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.warnings).toEqual(['目录未声明或未使用这些筛选，A 仅在返回结果本地复核：currency, max_amount, in_stock_only。不能宣称服务端已筛选。']);
+    expect(await instance.transport.search(intent)).toEqual(result.candidates);
+  });
   test('the configured catalog resolves only a standard trusted checkout URL and refuses redirect/expiry/foreign origin', async () => {
     let actionUrl: string | undefined;
     let expired = false;
@@ -147,6 +213,56 @@ describe('real HTTP merchant commerce boundary', () => {
     expect(requests[0]!.headers.get('x-dev-caller-id')).toBe('user_one');
     expect(requests[0]!.body).toEqual({ entry_id: 'entry_latte', quantity: 1, fulfillment: { method: 'pickup' } });
     expect(quote).toEqual(readQuote());
+  });
+  test('a persisted candidate can be quoted after restart only after a fresh trusted catalog query', async () => {
+    let entryRemoved = false;
+    const instance = server(request => {
+      const path = new URL(request.url).pathname;
+      if (path === '/.well-known/ocp-catalog') return Response.json({ ocp_version: '1.0', kind: 'WellKnownCatalogDiscovery',
+        catalog_id: candidate.catalog_id, manifest_url: `${instance.origin}/ocp/manifest` });
+      if (path === '/ocp/manifest') {
+        const manifest = structuredClone(manifestFixture);
+        for (const [name, endpoint] of Object.entries(manifest.endpoints)) endpoint.url = `${instance.origin}/ocp/${name}`;
+        return Response.json(manifest);
+      }
+      if (path === '/ocp/query') return Response.json(entryRemoved
+        ? { ...queryFixture, result_count: 0, entries: [] } : queryFixture);
+      if (path === '/ocp/resolve') {
+        const reference = structuredClone(resolveFixture);
+        reference.expires_at = new Date(Math.max(NOW, Date.now()) + 60_000).toISOString();
+        const binding = reference.action_bindings.find(value => value.action_id === 'checkout')!;
+        binding.entrypoint.url = `${instance.origin}/commerce/v1/checkouts`; binding.expires_at = reference.expires_at;
+        return Response.json(reference);
+      }
+      if (path === '/commerce/v1/quotes') return Response.json(wireQuote());
+      return new Response('unknown', { status: 404 });
+    });
+    const directory = await mkdtemp(join(tmpdir(), 'ocp-candidate-restart-'));
+    try {
+      const store = new FileSessionStore(directory);
+      const fresh = () => new ShoppingCoordinator(new HttpMerchantTransport({ origin: instance.origin,
+        merchantId: candidate.merchant_id, catalogId: candidate.catalog_id, now: () => NOW }),
+      store, issuer(), instance.origin, () => NOW, [candidate.merchant_id]);
+      const before = fresh();
+      const created = await before.create('user_one', intent);
+      const searched = await before.search('user_one', created.id);
+      expect(searched.phase).toBe('candidates');
+      const priorRequests = instance.requests.length;
+      const quoted = await fresh().select('user_one', created.id, candidate.entry_id);
+      expect(quoted.phase).toBe('awaiting_confirmation');
+      expect(quoted.quote!.total_minor).toBe(2500);
+      expect(instance.requests.slice(priorRequests).map(request => request.path)).toEqual([
+        '/.well-known/ocp-catalog', '/ocp/manifest', '/ocp/query', '/ocp/resolve', '/commerce/v1/quotes',
+      ]);
+      entryRemoved = true;
+      const beforeRemoved = instance.requests.length;
+      const stale = await fresh().select('user_one', created.id, candidate.entry_id);
+      expect(stale.phase).toBe('requote_required');
+      expect(stale.error!.code).toBe('requote_required');
+      expect(instance.requests.slice(beforeRemoved).map(request => request.path)).toEqual([
+        '/.well-known/ocp-catalog', '/ocp/manifest', '/ocp/query',
+      ]);
+    } finally { await rm(directory, { recursive: true, force: true }); }
   });
   test.each(['merchant', 'catalog', 'entry', 'quantity', 'fulfillment', 'currency', 'arithmetic', 'hash', 'expiry', 'extra'] as const)(
     'rejects a quote with invalid %s before confirmation', async mutation => {
@@ -257,7 +373,7 @@ describe('real HTTP merchant commerce boundary', () => {
         const store = new FileSessionStore(directory);
         const coordinator = new ShoppingCoordinator(transport, store, issuer(), origin, () => NOW, [candidate.merchant_id]);
         const session: Session = { id: `session_${crypto.randomUUID()}`, user_id: 'user_one', mode: 'http', phase: 'awaiting_confirmation',
-          intent, candidates: [candidate], selected: candidate, quote: readQuote(), checkout_url: `${origin}/commerce/v1/checkouts`,
+          intent, candidates: [candidate], selection: [{ candidate, quantity: 1 }], quote: readQuote(), checkout_url: `${origin}/commerce/v1/checkouts`,
           resolve_expires_at: iso(60_000), revision: 3, created_at: iso(), updated_at: iso() };
         await store.write(session);
         const unknown = await coordinator.confirm('user_one', session.id, { quote_id: session.quote!.quote_id,

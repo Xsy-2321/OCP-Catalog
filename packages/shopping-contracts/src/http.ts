@@ -39,16 +39,39 @@ export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
  */
 export const DEV_CALLER_HEADER = 'x-dev-caller-id';
 
-/** Request body for `POST /commerce/v1/quotes`. */
-export const createQuoteRequestSchema = z
-  .object({
+export const quoteRequestItemSchema = z.object({
+  entry_id: z.string().min(1).max(256),
+  quantity: z.number().int().positive().max(20),
+}).strict();
+
+/** Legacy single-item pickup requests and the additive whole-basket request. */
+export const createQuoteRequestSchema = z.union([
+  z.object({
     entry_id: z.string().min(1),
-    quantity: z.number().int().positive(),
+    quantity: z.number().int().positive().max(20),
     fulfillment: quoteFulfillmentSchema,
-  })
-  .strict();
+  }).strict(),
+  z.object({
+    items: z.array(quoteRequestItemSchema).min(1).max(10),
+    fulfillment: quoteFulfillmentSchema,
+  }).strict(),
+]).superRefine((request, context) => {
+  const items = 'items' in request ? request.items : [{ entry_id: request.entry_id, quantity: request.quantity }];
+  if (new Set(items.map(item => item.entry_id)).size !== items.length) {
+    context.addIssue({ code: 'custom', message: 'duplicate entries must be merged before quoting', path: ['items'] });
+  }
+  if (items.reduce((sum, item) => sum + item.quantity, 0) > 20) {
+    context.addIssue({ code: 'custom', message: 'a basket may contain at most 20 cups', path: ['items'] });
+  }
+  if (request.fulfillment.method === 'delivery' && !request.fulfillment.delivery) {
+    context.addIssue({ code: 'custom', message: 'delivery requires recipient, phone and address', path: ['fulfillment', 'delivery'] });
+  }
+});
 
 export type CreateQuoteRequest = z.infer<typeof createQuoteRequestSchema>;
+export function quoteRequestItems(request: CreateQuoteRequest) {
+  return 'items' in request ? request.items : [{ entry_id: request.entry_id, quantity: request.quantity }];
+}
 
 /** `200` body for `POST /commerce/v1/quotes`. */
 export const createQuoteResponseSchema = quoteSchema;

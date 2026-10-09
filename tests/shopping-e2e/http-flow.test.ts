@@ -106,6 +106,15 @@ async function restartMerchant(faults: MerchantFault[] = []) {
   expect(merchantInstance).not.toBe(previousInstance);
 }
 function checkoutCount() { return traffic.filter(value => value.path === '/commerce/v1/checkouts').length; }
+const delivery = { recipient: '验收收件人', phone: '13800000000', address: '测试大学一号楼101室' };
+async function readyBasket(fulfillment = 'pickup', budget = 5000, second = '美式', secondEntry = 'entry_americano') {
+  const created = await session('/api/sessions', { query: `拿铁、${second}`, quantity: 2,
+    items: [{ query: '拿铁', quantity: 1 }, { query: second, quantity: 1 }], currency: 'CNY',
+    max_total_minor: budget, merchant_id: MERCHANT, fulfillment, ...(fulfillment === 'delivery' ? { delivery } : {}) });
+  const searched = await session(`/api/sessions/${created.id}/search`, {});
+  expect(searched.candidate_groups).toHaveLength(2);
+  return session(`/api/sessions/${created.id}/quote`, { entry_ids: ['entry_latte', secondEntry] });
+}
 function assertRedacted(value: unknown) {
   const text = JSON.stringify(value);
   for (const secret of ['authorization_proof', 'signature', 'private_key', 'idempotency_key', 'payment_reference']) {
@@ -114,6 +123,103 @@ function assertRedacted(value: unknown) {
 }
 
 describe('A API confirmation → B bootstrap HTTP → independent SQLite', () => {
+  test('mixed delivery quotes all lines and one fee, concurrent confirmation and restart preserve the whole order', async () => {
+    const quoted = await readyBasket('delivery');
+    expect(quoted.phase).toBe('awaiting_confirmation');
+    expect(quoted.quote!.items!.map(item => [item.entry_id, item.quantity])).toEqual([['entry_latte', 1], ['entry_americano', 1]]);
+    expect(quoted.quote!.total_minor).toBe(3990); expect(quoted.quote!.fees).toHaveLength(1);
+    expect(quoted.quote!.delivery).toEqual(delivery); expect(checkoutCount()).toBe(0);
+    expect(snapshot().orders).toBe(0);
+    const confirmed = await Promise.all(Array.from({ length: 4 }, () => session(`/api/sessions/${quoted.id}/confirm`, confirmation(quoted))));
+    expect(new Set(confirmed.map(value => value.order!.order_id)).size).toBe(1);
+    expect(confirmed[0]!.order!.items).toEqual(quoted.quote!.items);
+    expect(confirmed[0]!.order!.delivery).toEqual(delivery); expect(confirmed[0]!.order!.fulfillment).toBe('delivery');
+    expect(checkoutCount()).toBe(1); expect(snapshot()).toEqual({ orders: 1, payments: 1, attempts: 1, inventory: 11 });
+    await api!.stop(true); await restartMerchant(); await startApi();
+    const recovered = await session(`/api/sessions/${quoted.id}/recover`, {});
+    expect(recovered.order).toEqual(confirmed[0]!.order);
+    expect((await session(`/api/sessions/${quoted.id}/confirm`, confirmation(quoted))).order!.order_id).toBe(recovered.order!.order_id);
+    expect(checkoutCount()).toBe(1);
+  });
+  test('one empty basket group never permits a partial selection or purchase', async () => {
+    const created = await session('/api/sessions', { query: '拿铁、脏脏咖啡', quantity: 2,
+      items: [{ query: '拿铁', quantity: 1 }, { query: '脏脏咖啡', quantity: 1 }], currency: 'CNY',
+      max_total_minor: 10000, merchant_id: MERCHANT, fulfillment: 'pickup' });
+    const searched = await session(`/api/sessions/${created.id}/search`, {});
+    expect(searched.candidate_groups![0]!.candidates.length).toBeGreaterThan(0);
+    expect(searched.candidate_groups![1]!.candidates).toEqual([]);
+    expect((await call(`/api/sessions/${created.id}/quote`, { entry_id: 'entry_latte' })).status).toBe(400);
+    expect((await call(`/api/sessions/${created.id}/quote`, { entry_ids: ['entry_latte'] })).status).toBe(400);
+    expect(snapshot()).toEqual({ orders: 0, payments: 0, attempts: 0, inventory: 12 });
+  });
+  test('basket selections cannot inject quantities or choose outside their original group', async () => {
+    const quoted = await readyBasket();
+    for (const body of [{ entry_ids: ['entry_latte', 'entry_americano'], quantity: 99 },
+      { entry_id: 'entry_latte', entry_ids: ['entry_latte', 'entry_americano'] },
+      { entry_ids: ['entry_americano', 'entry_latte'] }, { entry_ids: [null, 'entry_americano'] }]) {
+      expect((await call(`/api/sessions/${quoted.id}/quote`, body)).status).toBe(400);
+    }
+    expect(checkoutCount()).toBe(0);
+  });
+  test('whole basket budget includes delivery and cannot be confirmed when the fee pushes it over', async () => {
+    const quoted = await readyBasket('delivery', 3900);
+    expect(quoted.phase).toBe('failed'); expect(quoted.error!.code).toBe('budget_exceeded');
+    expect(quoted.quote!.total_minor).toBe(3990);
+    expect((await call(`/api/sessions/${quoted.id}/confirm`, confirmation(quoted))).status).toBe(409);
+    expect(checkoutCount()).toBe(0); expect(snapshot().orders).toBe(0);
+  });
+  test('a later basket line going out of stock leaves every other line unreserved', async () => {
+    const quoted = await readyBasket('pickup', 6000, '冷萃', 'entry_cold_brew');
+    merchant!.ctx.db.query("UPDATE inventory SET available_quantity = 0 WHERE entry_id = 'entry_cold_brew'").run();
+    const rejected = await session(`/api/sessions/${quoted.id}/confirm`, confirmation(quoted));
+    expect(rejected.error!.code).toBe('out_of_stock');
+    expect(snapshot().inventory).toBe(12); expect(snapshot().payments).toBe(0); expect(snapshot().orders).toBe(0);
+    expect(merchant!.ctx.db.query<{ n: number }, []>('SELECT COUNT(*) n FROM inventory_reservations').get()!.n).toBe(0);
+  });
+  test('declined payment releases every mixed basket line', async () => {
+    await restartMerchant(['payment_declined']);
+    const quoted = await readyBasket('delivery');
+    const failed = await session(`/api/sessions/${quoted.id}/confirm`, confirmation(quoted));
+    expect(failed.error!.code).toBe('payment_failed'); expect(snapshot().inventory).toBe(12); expect(snapshot().orders).toBe(0);
+    const stock = merchant!.ctx.db.query<{ available_quantity: number }, []>("SELECT available_quantity FROM inventory WHERE entry_id = 'entry_americano'").get()!;
+    expect(stock.available_quantity).toBe(30);
+    const reservations = merchant!.ctx.db.query<{ state: string }, []>('SELECT state FROM inventory_reservations').all();
+    expect(reservations).toHaveLength(2); expect(reservations.every(row => row.state === 'released')).toBe(true);
+  });
+  test('mixed delivery lost response recovers one order and blocks a new flow until recovery', async () => {
+    await restartMerchant(['response_dropped_after_settlement']);
+    const quoted = await readyBasket('delivery');
+    const unknown = await session(`/api/sessions/${quoted.id}/confirm`, confirmation(quoted));
+    expect(unknown.phase).toBe('unknown'); expect(snapshot().orders).toBe(1);
+    expect((await call('/api/sessions', { query: '拿铁', quantity: 1, currency: 'CNY', max_total_minor: 3000,
+      merchant_id: MERCHANT, fulfillment: 'pickup' })).status).toBe(409);
+    const recovered = await session(`/api/sessions/${quoted.id}/recover`, {});
+    expect(recovered.phase).toBe('confirmed'); expect(recovered.order!.delivery).toEqual(delivery);
+    expect(recovered.order!.items).toEqual(quoted.quote!.items); expect(checkoutCount()).toBe(1);
+  });
+  test('changed delivery address invalidates the original authorization', async () => {
+    const quoted = await readyBasket('delivery');
+    const row = merchant!.ctx.db.query<{ quote_json: string }, [string]>('SELECT quote_json FROM quotes WHERE quote_id = ?').get(quoted.quote!.quote_id)!;
+    const wire = JSON.parse(row.quote_json) as WireQuote;
+    wire.fulfillment.delivery!.address = '测试大学二号楼202室';
+    wire.terms_hash = computeTermsHash(buildQuoteTerms(wire));
+    merchant!.ctx.db.query('UPDATE quotes SET quote_json = ?, terms_hash = ? WHERE quote_id = ?').run(JSON.stringify(wire), wire.terms_hash, wire.quote_id);
+    const rejected = await session(`/api/sessions/${quoted.id}/confirm`, confirmation(quoted));
+    expect(rejected.phase).toBe('requote_required'); expect(snapshot().orders).toBe(0); expect(snapshot().inventory).toBe(12);
+  });
+  test('delivery requires valid user details and filters pickup-only merchandise', async () => {
+    for (const details of [undefined, { ...delivery, phone: 'bad-phone' }, { ...delivery, address: '' }]) {
+      expect((await call('/api/sessions', { query: '拿铁', quantity: 1, currency: 'CNY', max_total_minor: 3000,
+        merchant_id: MERCHANT, fulfillment: 'delivery', ...(details ? { delivery: details } : {}) })).status).toBe(400);
+    }
+    const pickup = await session('/api/sessions', { query: '手冲礼盒', quantity: 1, currency: 'CNY', max_total_minor: 10000,
+      merchant_id: MERCHANT, fulfillment: 'pickup' });
+    expect((await session(`/api/sessions/${pickup.id}/search`, {})).candidates.map(item => item.entry_id)).toEqual(['entry_gift_box']);
+    const created = await session('/api/sessions', { query: '手冲礼盒', quantity: 1, currency: 'CNY', max_total_minor: 10000,
+      merchant_id: MERCHANT, fulfillment: 'delivery', delivery });
+    expect((await session(`/api/sessions/${created.id}/search`, {})).candidates).toEqual([]);
+    expect(checkoutCount()).toBe(0);
+  });
   test('requires user confirmation, carries header metadata, and concurrent clicks settle only once', async () => {
     const config = await (await call('/api/config')).json();
     expect(config.mode).toBe('http');

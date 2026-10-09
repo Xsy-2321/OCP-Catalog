@@ -26,6 +26,8 @@ import {
   quoteInconsistency,
   quoteSchema,
   assertMinorAmount,
+  createQuoteRequestSchema,
+  quoteRequestItems,
   type CreateQuoteRequest,
   type Quote,
 } from '@ocp-catalog/shopping-contracts';
@@ -47,21 +49,20 @@ export interface BuildQuoteOptions {
  * sign an authorization over nothing.
  */
 export function buildQuote(
-  record: CatalogEntryRecord,
+  record: CatalogEntryRecord | readonly CatalogEntryRecord[],
   request: CreateQuoteRequest,
   options: BuildQuoteOptions,
 ): Quote {
   const { config, nowMs } = options;
-  const { attributes } = record;
-
-  if (!attributes.fulfillment.methods.includes(request.fulfillment.method)) {
-    throw new CommerceError(
-      'invalid_request',
-      `entry ${record.entry.entry_id} does not offer ${request.fulfillment.method}`,
-      { entry_id: record.entry.entry_id, supported: attributes.fulfillment.methods },
-    );
-  }
-
+  const parsed = createQuoteRequestSchema.safeParse(request);
+  if (!parsed.success) throw new CommerceError('invalid_request', 'invalid quote items or fulfillment');
+  request = parsed.data;
+  const records = Array.isArray(record) ? record : [record as CatalogEntryRecord];
+  const selections = quoteRequestItems(request).map(item => {
+    const selected = records.find(value => value.entry.entry_id === item.entry_id);
+    if (!selected) throw new CommerceError('not_found', `unknown entry_id: ${item.entry_id}`);
+    return { record: selected, quantity: item.quantity };
+  });
   const requestedLocation = request.fulfillment.location_id;
   if (requestedLocation !== undefined && requestedLocation !== config.locationId) {
     throw new CommerceError('invalid_request', `unknown fulfillment location ${requestedLocation}`, {
@@ -69,31 +70,40 @@ export function buildQuote(
     });
   }
 
-  const available = attributes.inventory.quantity;
-  if (!isPurchasable(record) || (available !== undefined && available < request.quantity)) {
-    throw new CommerceError(
-      'out_of_stock',
-      `entry ${record.entry.entry_id} has ${available ?? 'no'} units left, ${request.quantity} requested`,
-      { entry_id: record.entry.entry_id, available: available ?? 0, requested: request.quantity },
-    );
-  }
-
-  const unitMinor = attributes.price_minor;
-  const lineTotalMinor = unitMinor * request.quantity;
+  const currency = selections[0]!.record.attributes.price.currency;
+  const items = selections.map(({ record: selected, quantity }) => {
+    const { attributes } = selected;
+    if (attributes.price.currency !== currency) throw new CommerceError('invalid_request', 'all quote items must use the same currency');
+    if (!attributes.fulfillment.methods.includes(request.fulfillment.method)) {
+      throw new CommerceError('invalid_request', `entry ${selected.entry.entry_id} does not offer ${request.fulfillment.method}`,
+        { entry_id: selected.entry.entry_id, supported: attributes.fulfillment.methods });
+    }
+    const available = attributes.inventory.quantity;
+    if (!isPurchasable(selected) || (available !== undefined && available < quantity)) {
+      throw new CommerceError('out_of_stock', `entry ${selected.entry.entry_id} has ${available ?? 'no'} units left, ${quantity} requested`,
+        { entry_id: selected.entry.entry_id, available: available ?? 0, requested: quantity });
+    }
+    const lineTotalMinor = attributes.price_minor * quantity;
+    if (!Number.isSafeInteger(lineTotalMinor)) throw new CommerceError('invalid_request', 'quote total exceeds the safe integer minor-unit range');
+    return { entry_id: selected.entry.entry_id, title: selected.entry.title, quantity,
+      unit_minor: attributes.price_minor, line_total_minor: lineTotalMinor };
+  });
+  const deliveryFees = selections.flatMap(({ record: selected }) => selected.attributes.fulfillment.delivery_fee_minor === undefined
+    ? [] : [selected.attributes.fulfillment.delivery_fee_minor]);
   const fees =
-    request.fulfillment.method === 'delivery' && attributes.fulfillment.delivery_fee_minor !== undefined
+    request.fulfillment.method === 'delivery' && deliveryFees.length > 0
       ? [
           {
             code: 'delivery',
             label: '配送费',
-            amount_minor: attributes.fulfillment.delivery_fee_minor,
+            amount_minor: Math.max(...deliveryFees),
           },
         ]
       : [];
-  const subtotalMinor = lineTotalMinor;
+  const subtotalMinor = items.reduce((sum, item) => sum + item.line_total_minor, 0);
   const totalMinor = subtotalMinor + fees.reduce((sum, fee) => sum + fee.amount_minor, 0);
 
-  if (!Number.isSafeInteger(lineTotalMinor) || !Number.isSafeInteger(totalMinor)) {
+  if (!Number.isSafeInteger(subtotalMinor) || !Number.isSafeInteger(totalMinor)) {
     throw new CommerceError('invalid_request', 'quote total exceeds the safe integer minor-unit range');
   }
   assertMinorAmount(totalMinor, 'total_minor');
@@ -102,16 +112,8 @@ export function buildQuote(
     quote_id: newQuoteId(),
     merchant_id: config.merchantId,
     catalog_id: config.catalogId,
-    currency: attributes.price.currency,
-    items: [
-      {
-        entry_id: record.entry.entry_id,
-        title: record.entry.title,
-        quantity: request.quantity,
-        unit_minor: unitMinor,
-        line_total_minor: lineTotalMinor,
-      },
-    ],
+    currency,
+    items,
     fees,
     subtotal_minor: subtotalMinor,
     total_minor: totalMinor,

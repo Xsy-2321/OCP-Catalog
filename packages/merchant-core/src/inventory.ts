@@ -34,15 +34,16 @@ export function initializeInventory(db: Database, merchantId: string, catalog: r
         const quote = quoteSchema.parse(JSON.parse(attempt.quote_json));
         const problem = quoteInconsistency(quote);
         if (problem !== null) throw new Error(`legacy quote ${quote.quote_id} is inconsistent: ${problem}`);
-        const line = quote.items[0]!;
-        if (line.entry_id !== record.entry.entry_id) continue;
-        const state = attempt.status === 'confirmed' ? 'consumed' : attempt.status === 'failed' ? 'released' : 'reserved';
-        db.query(`INSERT OR IGNORE INTO inventory_reservations
-          (purchase_attempt_id, merchant_id, entry_id, quantity, state) VALUES (?, ?, ?, ?, ?)`)
-          .run(attempt.purchase_attempt_id, merchantId, line.entry_id, line.quantity, state);
-        if (state !== 'released') {
-          committedQuantity += line.quantity;
-          if (!Number.isSafeInteger(committedQuantity)) throw new Error('legacy committed stock exceeds the safe integer range');
+        for (const line of quote.items) {
+          if (line.entry_id !== record.entry.entry_id) continue;
+          const state = attempt.status === 'confirmed' ? 'consumed' : attempt.status === 'failed' ? 'released' : 'reserved';
+          db.query(`INSERT OR IGNORE INTO inventory_reservations
+            (purchase_attempt_id, merchant_id, entry_id, quantity, state) VALUES (?, ?, ?, ?, ?)`)
+            .run(attempt.purchase_attempt_id, merchantId, line.entry_id, line.quantity, state);
+          if (state !== 'released') {
+            committedQuantity += line.quantity;
+            if (!Number.isSafeInteger(committedQuantity)) throw new Error('legacy committed stock exceeds the safe integer range');
+          }
         }
       }
       if (quantity !== undefined && committedQuantity > 0) {
@@ -79,9 +80,10 @@ export function catalogWithInventory(ctx: MerchantContext): CatalogEntryRecord[]
 
 /** Must run in the checkout's BEGIN IMMEDIATE transaction before payment. */
 export function reserveInventory(ctx: MerchantContext, attemptId: string, entryId: string, quantity: number): void {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) throw new CommerceError('invalid_request', 'inventory reservation quantity must be a positive safe integer');
   const result = ctx.db.query(`UPDATE inventory
     SET available_quantity = CASE WHEN available_quantity IS NULL THEN NULL ELSE available_quantity - ? END
-    WHERE merchant_id = ? AND entry_id = ? AND availability_status != 'out_of_stock'
+    WHERE merchant_id = ? AND entry_id = ? AND availability_status IN ('in_stock', 'low_stock')
       AND (available_quantity IS NULL OR available_quantity >= ?)`)
     .run(quantity, ctx.config.merchantId, entryId, quantity);
   if (result.changes !== 1) {
@@ -97,27 +99,61 @@ export function reserveInventory(ctx: MerchantContext, attemptId: string, entryI
     .run(attemptId, ctx.config.merchantId, entryId, quantity);
 }
 
+/** A failed line must not leave earlier basket rows reserved, even when the
+ * checkout catches the error and commits its cached rejection in the outer transaction. */
+export function reserveBasketInventory(ctx: MerchantContext, attemptId: string, items: { entry_id: string; quantity: number }[]): void {
+  if (!Array.isArray(items) || items.length < 1 || items.length > 10
+    || items.some(item => !item || typeof item.entry_id !== 'string' || !item.entry_id.trim()
+      || !Number.isSafeInteger(item.quantity) || item.quantity < 1)
+    || new Set(items.map(item => item.entry_id)).size !== items.length
+    || items.reduce((sum, item) => sum + item.quantity, 0) > 20) {
+    throw new CommerceError('invalid_request', 'basket reservations require 1–10 unique entries and 1–20 total units');
+  }
+  inventorySavepoint(ctx.db, () => {
+    for (const item of items) reserveInventory(ctx, attemptId, item.entry_id, item.quantity);
+  });
+}
+
+function inventorySavepoint<T>(db: Database, operation: () => T): T {
+  const name = `ocp_inventory_${crypto.randomUUID().replaceAll('-', '')}`;
+  db.exec(`SAVEPOINT ${name}`);
+  try {
+    const result = operation();
+    db.exec(`RELEASE SAVEPOINT ${name}`);
+    return result;
+  } catch (error) {
+    db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
+    db.exec(`RELEASE SAVEPOINT ${name}`);
+    throw error;
+  }
+}
+
 /** A paid purchase consumes its existing reservation without deducting again. */
 export function consumeInventory(db: Database, attemptId: string): void {
   const result = db.query("UPDATE inventory_reservations SET state = 'consumed' WHERE purchase_attempt_id = ? AND state = 'reserved'").run(attemptId);
-  if (result.changes !== 1) throw new Error(`attempt ${attemptId} has no reserved inventory to consume`);
+  if (result.changes < 1) throw new Error(`attempt ${attemptId} has no reserved inventory to consume`);
 }
 
 /** A definite decline returns stock once; pending/unknown attempts keep it. */
 export function releaseInventory(db: Database, attemptId: string): void {
-  const row = db.query<{ merchant_id: string; entry_id: string; quantity: number }, [string]>(
-    "SELECT merchant_id, entry_id, quantity FROM inventory_reservations WHERE purchase_attempt_id = ? AND state = 'reserved'",
-  ).get(attemptId);
-  if (row === null) throw new Error(`attempt ${attemptId} has no reserved inventory to release`);
-  const debt = db.query<{ quantity: number }, [string, string]>(
-    'SELECT quantity FROM inventory_debts WHERE merchant_id = ? AND entry_id = ?',
-  ).get(row.merchant_id, row.entry_id)?.quantity ?? 0;
-  const debtReleased = Math.min(row.quantity, debt);
-  if (debtReleased > 0) {
-    db.query('UPDATE inventory_debts SET quantity = quantity - ? WHERE merchant_id = ? AND entry_id = ?')
-      .run(debtReleased, row.merchant_id, row.entry_id);
-  }
-  db.query(`UPDATE inventory SET available_quantity = CASE WHEN available_quantity IS NULL THEN NULL ELSE available_quantity + ? END
-    WHERE merchant_id = ? AND entry_id = ?`).run(row.quantity - debtReleased, row.merchant_id, row.entry_id);
-  db.query("UPDATE inventory_reservations SET state = 'released' WHERE purchase_attempt_id = ? AND state = 'reserved'").run(attemptId);
+  inventorySavepoint(db, () => {
+    const rows = db.query<{ merchant_id: string; entry_id: string; quantity: number }, [string]>(
+      "SELECT merchant_id, entry_id, quantity FROM inventory_reservations WHERE purchase_attempt_id = ? AND state = 'reserved'",
+    ).all(attemptId);
+    if (!rows.length) throw new Error(`attempt ${attemptId} has no reserved inventory to release`);
+    for (const row of rows) {
+      const debt = db.query<{ quantity: number }, [string, string]>(
+        'SELECT quantity FROM inventory_debts WHERE merchant_id = ? AND entry_id = ?',
+      ).get(row.merchant_id, row.entry_id)?.quantity ?? 0;
+      const debtReleased = Math.min(row.quantity, debt);
+      if (debtReleased > 0) {
+        db.query('UPDATE inventory_debts SET quantity = quantity - ? WHERE merchant_id = ? AND entry_id = ?')
+          .run(debtReleased, row.merchant_id, row.entry_id);
+      }
+      db.query(`UPDATE inventory SET available_quantity = CASE WHEN available_quantity IS NULL THEN NULL ELSE available_quantity + ? END
+        WHERE merchant_id = ? AND entry_id = ?`).run(row.quantity - debtReleased, row.merchant_id, row.entry_id);
+    }
+    const result = db.query("UPDATE inventory_reservations SET state = 'released' WHERE purchase_attempt_id = ? AND state = 'reserved'").run(attemptId);
+    if (result.changes !== rows.length) throw new Error(`attempt ${attemptId} reservation changed while releasing inventory`);
+  });
 }

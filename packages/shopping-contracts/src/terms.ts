@@ -12,62 +12,10 @@
  * label would invalidate every outstanding authorization.
  */
 import { createHash } from 'node:crypto';
-import { z } from 'zod';
 import { canonicalJson } from './canonical';
-import { TERMS_DOMAIN } from './version';
 
-export const quoteTermsItemSchema = z
-  .object({
-    entry_id: z.string().min(1),
-    quantity: z.number().int().positive(),
-    unit_minor: z.number().int().nonnegative(),
-  })
-  .strict();
-
-export const quoteTermsFeeSchema = z
-  .object({
-    code: z.string().min(1),
-    amount_minor: z.number().int(),
-  })
-  .strict();
-
-/**
- * How the merchant can hand over an order.
- *
- * This lives here, next to the terms it appears in, rather than beside the
- * catalog attributes that also use it. A signed field must not accept a value
- * the merchant has no way to fulfil: with a free string, A and B would happily
- * hash and sign an agreement for `"teleport"`, and the disagreement would only
- * surface at the counter. The catalog imports this enum rather than declaring a
- * second one, so there is exactly one vocabulary.
- */
-export const fulfillmentMethodSchema = z.enum(['pickup', 'delivery']);
-
-export type FulfillmentMethod = z.infer<typeof fulfillmentMethodSchema>;
-
-export const quoteFulfillmentSchema = z
-  .object({
-    method: fulfillmentMethodSchema,
-    location_id: z.string().min(1).optional(),
-  })
-  .strict();
-
-export type QuoteFulfillment = z.infer<typeof quoteFulfillmentSchema>;
-
-export const quoteTermsSchema = z
-  .object({
-    v: z.literal(TERMS_DOMAIN),
-    merchant_id: z.string().min(1),
-    quote_id: z.string().min(1),
-    currency: z.string().regex(/^[A-Z]{3}$/),
-    total_minor: z.number().int().nonnegative(),
-    items: z.array(quoteTermsItemSchema).min(1),
-    fees: z.array(quoteTermsFeeSchema),
-    fulfillment: quoteFulfillmentSchema,
-  })
-  .strict();
-
-export type QuoteTerms = z.infer<typeof quoteTermsSchema>;
+import type { QuoteTerms } from './terms-schema';
+export * from './terms-schema';
 
 const compareByEntryId = (a: QuoteTerms['items'][number], b: QuoteTerms['items'][number]): number =>
   a.entry_id < b.entry_id ? -1 : a.entry_id > b.entry_id ? 1 : 0;

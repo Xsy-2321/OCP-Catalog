@@ -19,11 +19,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type product struct {
@@ -46,6 +50,8 @@ var products = []product{
 }
 
 const providerID = "example_inmemory"
+const queryPack = "ocp.query.keyword.v1"
+const queryMode = "keyword"
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -115,9 +121,9 @@ func manifest() obj {
 				"description":   "Case-insensitive keyword match over the in-memory product list.",
 				"query_packs": []obj{
 					{
-						"pack_id":     "ocp.query.keyword.v1",
+						"pack_id":     queryPack,
 						"description": "Keyword search over title, summary, brand, and category.",
-						"query_modes": []string{"keyword"},
+						"query_modes": []string{queryMode},
 					},
 				},
 				"supports_explain": true,
@@ -170,7 +176,105 @@ func toEntry(p product) obj {
 	}
 }
 
-func query(body obj) obj {
+func invalidRequest(message string) (int, obj) {
+	return http.StatusBadRequest, obj{"error": obj{"code": "invalid_request", "message": message}}
+}
+
+func validateQuery(body obj) error {
+	allowed := map[string]bool{"ocp_version": true, "kind": true, "catalog_id": true, "query_pack": true,
+		"query_mode": true, "query": true, "filters": true, "limit": true, "offset": true, "cursor": true, "explain": true}
+	for key, value := range body {
+		if !allowed[key] {
+			return fmt.Errorf("invalid catalog query request")
+		}
+		switch key {
+		case "ocp_version", "kind", "query_mode":
+			text, ok := value.(string)
+			if !ok || (key == "ocp_version" && text != "1.0") || (key == "kind" && text != "CatalogQueryRequest") ||
+				(key == "query_mode" && text != "keyword" && text != "filter" && text != "semantic" && text != "hybrid") {
+				return fmt.Errorf("invalid catalog query request")
+			}
+		case "catalog_id", "query_pack", "cursor", "query":
+			text, ok := value.(string)
+			if !ok || (key != "query" && text == "") || (key == "query" && utf8.RuneCountInString(text) > 500) ||
+				(key == "cursor" && utf8.RuneCountInString(text) > 512) {
+				return fmt.Errorf("invalid catalog query request")
+			}
+		case "limit":
+			number, ok := value.(float64)
+			if !ok || number < 1 || number > 50 || math.Trunc(number) != number {
+				return fmt.Errorf("limit must be an integer between 1 and 50")
+			}
+		case "offset":
+			if number, ok := value.(float64); !ok || number != 0 {
+				return fmt.Errorf("offset must be zero; use cursor pagination")
+			}
+		case "explain":
+			if _, ok := value.(bool); !ok {
+				return fmt.Errorf("explain must be a boolean")
+			}
+		case "filters":
+			filters, ok := value.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid catalog query filters")
+			}
+			for field, filter := range filters {
+				switch field {
+				case "category", "brand", "currency", "availability_status", "provider_id", "sku":
+					if text, ok := filter.(string); !ok || text == "" {
+						return fmt.Errorf("invalid catalog query filters")
+					}
+				case "min_amount", "max_amount":
+					if number, ok := filter.(float64); !ok || number < 0 || math.IsNaN(number) || math.IsInf(number, 0) {
+						return fmt.Errorf("invalid catalog query filters")
+					}
+				case "in_stock_only", "has_image":
+					if _, ok := filter.(bool); !ok {
+						return fmt.Errorf("invalid catalog query filters")
+					}
+				default:
+					return fmt.Errorf("invalid catalog query filters")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// validateQueryCapability checks manifest support after protocol shape validation.
+func validateQueryCapability(body obj) error {
+	if pack, exists := body["query_pack"]; exists && pack != queryPack {
+		return fmt.Errorf("unsupported query_pack: only %s is supported", queryPack)
+	}
+	// Preserve the example's keyword/list-all default when mode is omitted.
+	if mode, exists := body["query_mode"]; exists && mode != queryMode {
+		return fmt.Errorf("unsupported query_mode: only %s is supported", queryMode)
+	}
+	if filters, ok := body["filters"].(map[string]any); ok && len(filters) > 0 {
+		return fmt.Errorf("unsupported filters: this keyword node does not support filter fields")
+	}
+	return nil
+}
+
+func query(body obj) (int, obj) {
+	if err := validateQuery(body); err != nil {
+		return invalidRequest(err.Error())
+	}
+	if err := validateQueryCapability(body); err != nil {
+		return invalidRequest(err.Error())
+	}
+	cursor := "0"
+	if raw, exists := body["cursor"]; exists {
+		var ok bool
+		cursor, ok = raw.(string)
+		if !ok {
+			return invalidRequest("cursor must be a non-negative decimal integer string")
+		}
+	}
+	offsetValue, err := strconv.ParseUint(cursor, 10, 53)
+	if err != nil || cursor == "" || strings.IndexFunc(cursor, func(r rune) bool { return r < '0' || r > '9' }) != -1 {
+		return invalidRequest("cursor must be a non-negative decimal integer string")
+	}
 	term := strings.ToLower(strings.TrimSpace(asString(body["query"])))
 	limit := 20
 	if l, ok := body["limit"].(float64); ok && l >= 1 && l <= 50 {
@@ -182,9 +286,20 @@ func query(body obj) obj {
 			matches = append(matches, p)
 		}
 	}
-	if len(matches) > limit {
-		matches = matches[:limit]
+	offset := len(matches)
+	if offsetValue < uint64(len(matches)) {
+		offset = int(offsetValue)
 	}
+	end := offset + limit
+	if end > len(matches) {
+		end = len(matches)
+	}
+	hasMore := end < len(matches)
+	page := obj{"limit": limit, "offset": 0, "has_more": hasMore}
+	if hasMore {
+		page["next_cursor"] = strconv.Itoa(end)
+	}
+	matches = matches[offset:end]
 	entries := make([]obj, 0, len(matches))
 	for _, p := range matches {
 		entries = append(entries, obj{
@@ -193,16 +308,16 @@ func query(body obj) obj {
 			"explain": []string{fmt.Sprintf("Keyword match for %q.", asString(body["query"]))},
 		})
 	}
-	return obj{
+	return http.StatusOK, obj{
 		"ocp_version":  "1.0",
 		"kind":         "CatalogQueryResult",
 		"id":           randID("qry"),
 		"catalog_id":   catalogID,
-		"query_pack":   "ocp.query.keyword.v1",
-		"query_mode":   "keyword",
+		"query_pack":   queryPack,
+		"query_mode":   queryMode,
 		"query":        asString(body["query"]),
 		"result_count": len(entries),
-		"page":         obj{"limit": limit, "offset": 0, "has_more": false},
+		"page":         page,
 		"entries":      entries,
 	}
 }
@@ -255,12 +370,17 @@ func asString(v any) string {
 	return ""
 }
 
-func readJSON(r *http.Request) obj {
+func readJSON(r *http.Request) (obj, error) {
 	var parsed obj
-	if err := json.NewDecoder(r.Body).Decode(&parsed); err != nil || parsed == nil {
-		return obj{}
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&parsed); err != nil || parsed == nil {
+		return nil, fmt.Errorf("request body must be a valid JSON object")
 	}
-	return parsed
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("request body must contain exactly one JSON object")
+	}
+	return parsed, nil
 }
 
 // NewMux builds the router. Exported so tests can exercise it without a socket.
@@ -270,9 +390,24 @@ func NewMux() *http.ServeMux {
 	mux.HandleFunc("GET /ocp/manifest", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, manifest()) })
 	mux.HandleFunc("GET /ocp/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, health()) })
 	mux.HandleFunc("GET /ocp/contracts", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, contracts()) })
-	mux.HandleFunc("POST /ocp/query", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, query(readJSON(r))) })
+	mux.HandleFunc("POST /ocp/query", func(w http.ResponseWriter, r *http.Request) {
+		input, err := readJSON(r)
+		if err != nil {
+			status, body := invalidRequest(err.Error())
+			writeJSON(w, status, body)
+			return
+		}
+		status, body := query(input)
+		writeJSON(w, status, body)
+	})
 	mux.HandleFunc("POST /ocp/resolve", func(w http.ResponseWriter, r *http.Request) {
-		status, body := resolve(readJSON(r))
+		input, err := readJSON(r)
+		if err != nil {
+			status, body := invalidRequest(err.Error())
+			writeJSON(w, status, body)
+			return
+		}
+		status, body := resolve(input)
 		writeJSON(w, status, body)
 	})
 	return mux

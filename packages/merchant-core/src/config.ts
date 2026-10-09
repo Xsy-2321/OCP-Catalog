@@ -287,9 +287,17 @@ export function loadConfig(options: LoadConfigOptions): MerchantConfig {
   const trustedKeys =
     trustedKeysPath === '' ? new Map<string, KeyObject>() : loadTrustedKeys(trustedKeysPath, readTextFile, problems, trustedIssuers);
 
-  const publicBaseUrl = (
+  let publicBaseUrl = (
     (env[ENV.publicBaseUrl] ?? '').trim() || `http://127.0.0.1:${port}`
   ).replace(/\/+$/, '');
+  try {
+    const url = new URL(publicBaseUrl);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
+      || url.pathname !== '/' || url.search || url.hash) throw new Error('invalid origin');
+    publicBaseUrl = url.origin;
+  } catch {
+    problems.push(`${ENV.publicBaseUrl} must be an absolute HTTP(S) origin without credentials, path, query or fragment`);
+  }
 
   if (problems.length > 0) throw new MerchantConfigError(problems);
 

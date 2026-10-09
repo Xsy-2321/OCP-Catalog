@@ -51,7 +51,7 @@ export const CATALOG_SEED: readonly CatalogEntry[] = [
       price: { currency: 'CNY', amount: 9.9, price_type: 'fixed' },
       price_minor: 990,
       inventory: { availability_status: 'in_stock', quantity: 30 },
-      fulfillment: { methods: ['pickup'] },
+      fulfillment: { methods: ['pickup', 'delivery'], delivery_fee_minor: 500 },
     },
   },
   {

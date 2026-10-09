@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { knownRegistries, type KnownRegistry } from '../content/directory/registries';
+import { requestJson, startPolling } from './request';
 
 export type RegistrationDiscovery = {
   ocp_version?: string;
@@ -60,9 +61,9 @@ export type RegistryRuntime = {
   seed: KnownRegistry;
   status: RegistryStatus;
   discovery: RegistrationDiscovery | null;
-  catalogCount: number;
-  verifiedCount: number;
-  healthyCount: number;
+  catalogCount: number | null;
+  verifiedCount: number | null;
+  healthyCount: number | null;
   lastChecked: number | null;
   error?: string;
 };
@@ -85,6 +86,7 @@ export type DirectorySnapshot = {
   };
   lastUpdated: number | null;
   isLoading: boolean;
+  refresh: () => void;
 };
 
 type Options = {
@@ -92,15 +94,22 @@ type Options = {
   searchLimit?: number;
 };
 
-async function fetchDiscovery(endpoint: string): Promise<RegistrationDiscovery> {
+async function fetchDiscovery(endpoint: string, signal: AbortSignal): Promise<RegistrationDiscovery> {
   const url = `${endpoint.replace(/\/+$/, '')}/.well-known/ocp-registration`;
-  const response = await fetch(url, { headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`discovery ${response.status}`);
-  return (await response.json()) as RegistrationDiscovery;
+  const payload = await requestJson(url, { signal });
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error('Invalid registration discovery payload');
+  }
+  const discovery = payload as RegistrationDiscovery;
+  if (discovery.catalog_search_url !== undefined && typeof discovery.catalog_search_url !== 'string') {
+    throw new Error('Invalid catalog search endpoint');
+  }
+  return discovery;
 }
 
-async function fetchCatalogs(searchUrl: string, limit: number): Promise<CatalogSearchResultItem[]> {
-  const response = await fetch(searchUrl, {
+async function fetchCatalogs(searchUrl: string, limit: number, signal: AbortSignal): Promise<CatalogSearchResultItem[]> {
+  const payload = await requestJson(searchUrl, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({
@@ -110,10 +119,13 @@ async function fetchCatalogs(searchUrl: string, limit: number): Promise<CatalogS
       limit,
     }),
   });
-  if (!response.ok) throw new Error(`search ${response.status}`);
-  const payload = await response.json();
-  const items = Array.isArray(payload?.items) ? payload.items : [];
-  return items as CatalogSearchResultItem[];
+  if (typeof payload !== 'object' || payload === null || !('items' in payload) || !Array.isArray(payload.items)) {
+    throw new Error('Invalid catalog search payload: expected items array');
+  }
+  if (!payload.items.every((item) => typeof item === 'object' && item !== null && typeof item.catalog_id === 'string')) {
+    throw new Error('Invalid catalog search item');
+  }
+  return payload.items as CatalogSearchResultItem[];
 }
 
 function resolveSearchUrl(endpoint: string, discovery: RegistrationDiscovery): string {
@@ -127,75 +139,62 @@ function summarize(item: CatalogSearchResultItem) {
   return { verified, healthy };
 }
 
+export async function loadRegistry(seed: KnownRegistry, searchLimit: number, signal: AbortSignal): Promise<{
+  runtime: RegistryRuntime;
+  catalogs: CatalogSearchResultItem[];
+}> {
+  let discovery: RegistrationDiscovery | null = null;
+  try {
+    discovery = await fetchDiscovery(seed.endpoint, signal);
+    const catalogs = await fetchCatalogs(resolveSearchUrl(seed.endpoint, discovery), searchLimit, signal);
+    return {
+      runtime: {
+        seed, status: 'live', discovery,
+        catalogCount: catalogs.length,
+        verifiedCount: catalogs.filter((item) => summarize(item).verified).length,
+        healthyCount: catalogs.filter((item) => summarize(item).healthy).length,
+        lastChecked: Date.now(),
+      },
+      catalogs,
+    };
+  } catch (error) {
+    return {
+      runtime: {
+        seed, status: 'unreachable', discovery,
+        catalogCount: null, verifiedCount: null, healthyCount: null,
+        lastChecked: Date.now(),
+        error: `${discovery ? 'Catalog search' : 'Discovery'}: ${error instanceof Error ? error.message : 'unknown'}`,
+      },
+      catalogs: [],
+    };
+  }
+}
+
 export function useDirectory({ pollMs = 30_000, searchLimit = 50 }: Options = {}): DirectorySnapshot {
   const [registries, setRegistries] = useState<RegistryRuntime[]>(() =>
     knownRegistries.map((seed) => ({
       seed,
       status: 'loading' as RegistryStatus,
       discovery: null,
-      catalogCount: 0,
-      verifiedCount: 0,
-      healthyCount: 0,
+      catalogCount: null,
+      verifiedCount: null,
+      healthyCount: null,
       lastChecked: null,
     })),
   );
   const [catalogsByRegistry, setCatalogsByRegistry] = useState<Record<string, CatalogSearchResultItem[]>>({});
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [revision, setRevision] = useState(0);
+  const refresh = useCallback(() => {
+    setIsLoading(true);
+    setRevision((value) => value + 1);
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadOne(seed: KnownRegistry): Promise<{
-      runtime: RegistryRuntime;
-      catalogs: CatalogSearchResultItem[];
-    }> {
-      const now = Date.now();
-      try {
-        const discovery = await fetchDiscovery(seed.endpoint);
-        const searchUrl = resolveSearchUrl(seed.endpoint, discovery);
-        const catalogs = await fetchCatalogs(searchUrl, searchLimit).catch(
-          () => [] as CatalogSearchResultItem[],
-        );
-        let verifiedCount = 0;
-        let healthyCount = 0;
-        for (const item of catalogs) {
-          const { verified, healthy } = summarize(item);
-          if (verified) verifiedCount += 1;
-          if (healthy) healthyCount += 1;
-        }
-        return {
-          runtime: {
-            seed,
-            status: 'live',
-            discovery,
-            catalogCount: catalogs.length,
-            verifiedCount,
-            healthyCount,
-            lastChecked: now,
-          },
-          catalogs,
-        };
-      } catch (error) {
-        return {
-          runtime: {
-            seed,
-            status: 'unreachable',
-            discovery: null,
-            catalogCount: 0,
-            verifiedCount: 0,
-            healthyCount: 0,
-            lastChecked: now,
-            error: error instanceof Error ? error.message : 'unknown',
-          },
-          catalogs: [],
-        };
-      }
-    }
-
-    async function loadAll() {
-      const results = await Promise.all(knownRegistries.map(loadOne));
-      if (cancelled) return;
+    async function loadAll(signal: AbortSignal) {
+      const results = await Promise.all(knownRegistries.map((seed) => loadRegistry(seed, searchLimit, signal)));
+      if (signal.aborted) return;
       setRegistries(results.map((r) => r.runtime));
       const byRegistry: Record<string, CatalogSearchResultItem[]> = {};
       for (let i = 0; i < knownRegistries.length; i += 1) {
@@ -206,14 +205,9 @@ export function useDirectory({ pollMs = 30_000, searchLimit = 50 }: Options = {}
       setIsLoading(false);
     }
 
-    void loadAll();
-    const timer = setInterval(loadAll, pollMs);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [pollMs, searchLimit]);
-
+    const polling = startPolling(loadAll, pollMs);
+    return () => polling.stop();
+  }, [pollMs, searchLimit, revision]);
   const catalogs = useMemo<CatalogWithSources[]>(() => {
     const map = new Map<string, CatalogWithSources>();
     for (const [registryId, items] of Object.entries(catalogsByRegistry)) {
@@ -256,5 +250,5 @@ export function useDirectory({ pollMs = 30_000, searchLimit = 50 }: Options = {}
     };
   }, [registries, catalogs]);
 
-  return { registries, catalogs, stats, lastUpdated, isLoading };
+  return { registries, catalogs, stats, lastUpdated, isLoading, refresh };
 }

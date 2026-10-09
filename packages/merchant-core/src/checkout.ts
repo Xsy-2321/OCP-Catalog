@@ -61,7 +61,7 @@ import {
 import { takePayment, type PaymentOutcome } from './payment';
 import { getStoredQuote } from './quote';
 import { verifyAuthorization } from './authorization';
-import { consumeInventory, releaseInventory, reserveInventory } from './inventory';
+import { consumeInventory, releaseInventory, reserveBasketInventory } from './inventory';
 
 /**
  * How much the injected "price moved" fault moves the price by.
@@ -282,7 +282,9 @@ function checkoutInTransaction(
 ): CheckoutResult {
   const { config, db, clock } = ctx;
   const { callerId, idempotencyKey } = options;
-  const nowMs = startedAtMs;
+  // BEGIN IMMEDIATE may have waited for another writer. Validity is checked
+  // at the time we actually hold the lock; startedAtMs only measures latency.
+  const nowMs = clock.nowMs();
   const cache = (status: number, body: unknown): void =>
     cacheResponse({ db, options, merchantId: config.merchantId, digest, attemptId: request.purchase_attempt_id, nowMs }, status, body);
 
@@ -350,36 +352,29 @@ function checkoutInTransaction(
 
   // 6. The catalog entry behind the quote. It can vanish only if the catalog was
   //    replaced under a live quote, which is a re-quote rather than a crash.
-  const line = quote.items[0];
-  const record = findEntry(ctx.catalog, line.entry_id);
-  if (record === null) {
-    throw new CommerceError('requote_required', `entry ${line.entry_id} is no longer in the catalog`, {
-      reason: 'entry_gone',
-    });
-  }
-
-  // 7. Re-price from today's catalog. This is a real check that catches a price
-  //    change between quote and till; the `price_raised_after_quote` fault just
-  //    makes such a change happen on demand so the branch is reachable.
-  const currentUnitMinor =
-    record.attributes.price_minor +
-    (faultEnabled(config.faults, 'price_raised_after_quote') ? FAULT_PRICE_RAISE_MINOR : 0);
-  if (currentUnitMinor !== line.unit_minor) {
-    throw new CommerceError(
-      'requote_required',
-      `entry ${line.entry_id} is now ${currentUnitMinor} minor per unit, quoted at ${line.unit_minor}`,
-      { reason: 'price_changed', quoted_unit_minor: line.unit_minor, current_unit_minor: currentUnitMinor },
-    );
-  }
+  const selections = quote.items.map(line => {
+    const record = findEntry(ctx.catalog, line.entry_id);
+    if (record === null) throw new CommerceError('requote_required', `entry ${line.entry_id} is no longer in the catalog`, { reason: 'entry_gone' });
+    // Re-price every line before any reservation or payment.
+    const currentUnitMinor = record.attributes.price_minor +
+      (faultEnabled(config.faults, 'price_raised_after_quote') ? FAULT_PRICE_RAISE_MINOR : 0);
+    if (currentUnitMinor !== line.unit_minor) {
+      throw new CommerceError('requote_required', `entry ${line.entry_id} is now ${currentUnitMinor} minor per unit, quoted at ${line.unit_minor}`,
+        { reason: 'price_changed', entry_id: line.entry_id, quoted_unit_minor: line.unit_minor, current_unit_minor: currentUnitMinor });
+    }
+    return { line, record };
+  });
 
   // Unit price alone does not describe the deal. Currency, fulfillment and
   // delivery charges may also change under an otherwise valid signed quote.
-  const currentDeliveryFee = quote.fulfillment.method === 'delivery'
-    ? record.attributes.fulfillment.delivery_fee_minor : undefined;
+  const deliveryFees = selections.flatMap(({ record }) => record.attributes.fulfillment.delivery_fee_minor === undefined
+    ? [] : [record.attributes.fulfillment.delivery_fee_minor]);
+  const currentDeliveryFee = quote.fulfillment.method === 'delivery' && deliveryFees.length
+    ? Math.max(...deliveryFees) : undefined;
   const expectedFees = currentDeliveryFee === undefined ? [] : [{ code: 'delivery', amount_minor: currentDeliveryFee }];
   const currentTermsChanged =
-    record.attributes.price.currency !== quote.currency ||
-    !record.attributes.fulfillment.methods.includes(quote.fulfillment.method) ||
+    selections.some(({ record }) => record.attributes.price.currency !== quote.currency ||
+      !record.attributes.fulfillment.methods.includes(quote.fulfillment.method)) ||
     (quote.fulfillment.location_id !== undefined && quote.fulfillment.location_id !== config.locationId) ||
     expectedFees.length !== quote.fees.length ||
     expectedFees.some((fee, index) => fee.code !== quote.fees[index]!.code || fee.amount_minor !== quote.fees[index]!.amount_minor);
@@ -402,16 +397,11 @@ function checkoutInTransaction(
 
   // 9. The fault is an extra rejection; actual stock is conditional-updated
   //    below inside this same write transaction, shared by all processes.
-  const requestedQuantity = line.quantity;
-  const soldOut =
-    faultEnabled(config.faults, 'stock_exhausted_after_quote') ||
-    !isPurchasable(record);
-  if (soldOut) {
-    throw new CommerceError(
-      'out_of_stock',
-      `entry ${line.entry_id} is unavailable, ${requestedQuantity} requested`,
-      { entry_id: line.entry_id, available: 0, requested: requestedQuantity },
-    );
+  for (const { line, record } of selections) {
+    if (faultEnabled(config.faults, 'stock_exhausted_after_quote') || !isPurchasable(record)) {
+      throw new CommerceError('out_of_stock', `entry ${line.entry_id} is unavailable, ${line.quantity} requested`,
+        { entry_id: line.entry_id, available: 0, requested: line.quantity });
+    }
   }
 
   // 10. An attempt id may belong to exactly one logical purchase. Reusing it for
@@ -424,7 +414,7 @@ function checkoutInTransaction(
     );
   }
 
-  reserveInventory(ctx, request.purchase_attempt_id, line.entry_id, requestedQuantity);
+  reserveBasketInventory(ctx, request.purchase_attempt_id, quote.items);
 
   // 11. The injected payment timeout. Nothing is charged: the payment genuinely
   //     has not been attempted yet, and the poll is what attempts it. Modelling

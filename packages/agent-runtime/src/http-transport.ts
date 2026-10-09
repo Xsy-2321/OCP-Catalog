@@ -2,14 +2,15 @@ import {
   CHECKOUT_ACTION_ID, COMMERCE_ERROR_HTTP_STATUS, DEV_CALLER_HEADER, IDEMPOTENCY_KEY_HEADER,
   authorizationProofSchema, buildQuoteTerms, checkoutConfirmedResponseSchema,
   checkoutProcessingResponseSchema, checkoutRequestSchema, commerceErrorResponseSchema,
-  computeTermsHash, createQuoteRequestSchema, createQuoteResponseSchema, orderResponseSchema,
+  computeTermsHash, createQuoteRequestSchema, createQuoteResponseSchema, orderResponseSchema, orderInconsistency,
   purchaseAttemptResponseSchema, quoteInconsistency, quoteTermsSchema, termsInconsistency,
   type CommerceErrorCode, type Order as WireOrder, type PurchaseAttempt, type Quote as WireQuote,
 } from '@ocp-catalog/shopping-contracts';
 import { ConfirmedPurchaseProtocolError, FlowError } from './errors';
 import { OcpConsumer } from './ocp-consumer';
-import { ocpAmountToMinor, trustedUrl } from './validation';
-import type { Candidate, CheckoutInput, Intent, MerchantAttempt, MerchantPort, Order, Quote } from './types';
+import { requestSignal } from './cancellation';
+import { mergeSelections, ocpAmountToMinor, parseIntent, quoteItems, sameDelivery, trustedUrl } from './validation';
+import type { BasketSelection, Candidate, CheckoutInput, Intent, MerchantAttempt, MerchantPort, Order, Quote, ReadOperationOptions } from './types';
 
 export interface HttpMerchantTransportOptions {
   origin: string;
@@ -72,44 +73,73 @@ export class HttpMerchantTransport implements MerchantPort {
     });
   }
 
-  async search(intent: Intent): Promise<Candidate[]> {
+  async health() { return this.consumer.health(); }
+
+  async search(intent: Intent, options: ReadOperationOptions = {}): Promise<Candidate[]> {
+    return (await this.searchWithWarnings(intent, options)).candidates;
+  }
+
+  async searchWithWarnings(intent: Intent, options: ReadOperationOptions = {}): Promise<{ candidates: Candidate[]; warnings: string[] }> {
     this.intent(intent);
-    const { entries } = await this.consumer.search(intent);
-    return entries.map(({ entry }) => {
+    const { entries, warnings } = await this.consumer.search(intent, options);
+    const candidates = entries.map(({ entry }) => {
       const price = entry.attributes.price as { amount: number; currency: string };
+      const fulfillment = entry.attributes.fulfillment as { methods?: unknown } | undefined;
+      const methods = Array.isArray(fulfillment?.methods)
+        ? fulfillment.methods.filter((method): method is 'pickup' | 'delivery' => method === 'pickup' || method === 'delivery') : undefined;
       return {
         entry_id: entry.entry_id, catalog_id: entry.catalog_id, merchant_id: this.options.merchantId,
         title: entry.title, description: entry.summary ?? '', search_price_minor: ocpAmountToMinor(price.amount),
         currency: price.currency, in_stock: true,
+        ...(methods ? { fulfillment_methods: methods } : {}),
       };
     });
+    return { candidates: candidates.filter(candidate => candidate.fulfillment_methods
+      ? candidate.fulfillment_methods.includes(intent.fulfillment) : intent.fulfillment === 'pickup'), warnings };
   }
 
-  async resolve(candidate: Candidate): Promise<{ checkout_url: string; expires_at: string }> {
+  async resolve(candidate: Candidate, intent?: Intent, options: ReadOperationOptions = {}): Promise<{ checkout_url: string; expires_at: string }> {
     this.candidate(candidate);
-    const resolved = await this.consumer.resolve(candidate.entry_id);
+    if (intent) this.intent(intent);
+    const resolved = await this.consumer.resolve(candidate.entry_id, intent, options);
     const checkoutUrl = trustedUrl(resolved.checkout_url, this.origin, ['/commerce/v1/checkouts']);
     const expiries = [resolved.reference.expires_at, ...(resolved.binding.expires_at ? [resolved.binding.expires_at] : [])];
     if (expiries.some(value => !Number.isFinite(Date.parse(value)) || Date.parse(value) <= this.now())) throw protocol();
     return { checkout_url: checkoutUrl, expires_at: new Date(Math.min(...expiries.map(Date.parse))).toISOString() };
   }
 
-  async quote(userId: string, candidate: Candidate, intent: Intent): Promise<Quote> {
-    this.candidate(candidate); this.intent(intent);
-    const body = createQuoteRequestSchema.parse({ entry_id: candidate.entry_id, quantity: intent.quantity,
-      fulfillment: { method: intent.fulfillment } });
-    const { status, value } = await this.request('/commerce/v1/quotes', userId, body);
+  async quote(userId: string, candidate: Candidate, intent: Intent, options: ReadOperationOptions = {}): Promise<Quote> {
+    return this.quoteBasket(userId, [{ candidate, quantity: intent.quantity }], intent, options);
+  }
+
+  async quoteBasket(userId: string, selections: BasketSelection[], intent: Intent, options: ReadOperationOptions = {}): Promise<Quote> {
+    this.intent(intent);
+    const merged = mergeSelections(selections);
+    if (!merged.length || merged.length > 10 || merged.some(selection => !Number.isSafeInteger(selection.quantity) || selection.quantity < 1)
+      || merged.reduce((sum, selection) => sum + selection.quantity, 0) !== intent.quantity) throw protocol();
+    for (const selection of merged) this.candidate(selection.candidate);
+    const fulfillment = { method: intent.fulfillment, ...(intent.delivery ? { delivery: intent.delivery } : {}) };
+    const body = createQuoteRequestSchema.parse(intent.fulfillment === 'pickup' && merged.length === 1
+      ? { entry_id: merged[0]!.candidate.entry_id, quantity: intent.quantity, fulfillment }
+      : { items: merged.map(selection => ({ entry_id: selection.candidate.entry_id, quantity: selection.quantity })), fulfillment });
+    const { status, value } = await this.request('/commerce/v1/quotes', userId, body, undefined, options.signal);
     if (status !== 200) throw protocol();
     const wire = parse(createQuoteResponseSchema, value);
     this.wireQuote(wire);
     const item = wire.items[0]!;
-    if (item.entry_id !== candidate.entry_id || item.quantity !== intent.quantity || wire.currency !== intent.currency
-      || wire.fulfillment.method !== intent.fulfillment || wire.fulfillment.location_id !== undefined) throw protocol();
+    if (wire.items.length !== merged.length || merged.some(selection => !wire.items.some(line => line.entry_id === selection.candidate.entry_id
+      && line.quantity === selection.quantity)) || wire.currency !== intent.currency
+      || wire.fulfillment.method !== intent.fulfillment || wire.fulfillment.location_id !== undefined
+      || !sameDelivery(wire.fulfillment.delivery, intent.delivery)) throw protocol();
     if (Date.parse(wire.expires_at) <= this.now()) throw new FlowError('quote_expired', SAFE_ERRORS.quote_expired, 409);
     return {
       quote_id: wire.quote_id, user_id: identifier(userId), merchant_id: wire.merchant_id, catalog_id: wire.catalog_id,
-      entry_id: item.entry_id, title: item.title, quantity: item.quantity, fulfillment: 'pickup', currency: wire.currency,
-      unit_price_minor: item.unit_minor, fees: wire.fees.map(fee => ({ label: fee.label, amount_minor: fee.amount_minor })),
+      entry_id: item.entry_id, title: item.title, quantity: wire.items.reduce((sum, line) => sum + line.quantity, 0), fulfillment: wire.fulfillment.method, currency: wire.currency,
+      ...(wire.fulfillment.delivery ? { delivery: wire.fulfillment.delivery } : {}),
+      items: wire.items.map(line => ({ entry_id: line.entry_id, title: line.title, quantity: line.quantity,
+        unit_price_minor: line.unit_minor, line_total_minor: line.line_total_minor })),
+      unit_price_minor: item.unit_minor, fees: wire.fees.map(fee => ({ label: fee.label, amount_minor: fee.amount_minor,
+        ...(intent.items.length > 1 || intent.fulfillment === 'delivery' ? { code: fee.code } : {}) })),
       total_minor: wire.total_minor, terms_hash: wire.terms_hash, expires_at: wire.expires_at,
       wire_terms: buildQuoteTerms(wire),
     };
@@ -122,16 +152,24 @@ export class HttpMerchantTransport implements MerchantPort {
       || quote.terms_hash !== input.terms_hash || quote.merchant_id !== this.options.merchantId
       || quote.catalog_id !== this.options.catalogId || !quote.wire_terms) throw protocol();
     const terms = parse(quoteTermsSchema, quote.wire_terms);
+    const lines = quoteItems(quote);
     if (computeTermsHash(terms) !== quote.terms_hash || terms.quote_id !== quote.quote_id
       || terms.merchant_id !== quote.merchant_id || terms.currency !== quote.currency
-      || terms.total_minor !== quote.total_minor || terms.items.length !== 1
-      || terms.items[0]!.entry_id !== quote.entry_id || terms.items[0]!.quantity !== quote.quantity
-      || terms.items[0]!.unit_minor !== quote.unit_price_minor || terms.fulfillment.method !== quote.fulfillment
+      || terms.total_minor !== quote.total_minor || terms.items.length !== lines.length
+      || new Set(terms.items.map(item => item.entry_id)).size !== terms.items.length
+      || lines.reduce((sum, line) => sum + line.quantity, 0) !== quote.quantity
+      || quote.entry_id !== lines[0]?.entry_id || quote.unit_price_minor !== lines[0]?.unit_price_minor
+      || terms.items.some(item => !lines.some(line => line.entry_id === item.entry_id && line.quantity === item.quantity
+        && line.unit_price_minor === item.unit_minor && line.line_total_minor === line.unit_price_minor * line.quantity))
+      || new Set(lines.map(line => line.entry_id)).size !== lines.length || terms.fulfillment.method !== quote.fulfillment
+      || !sameDelivery(terms.fulfillment.delivery, quote.delivery)
       || terms.fulfillment.location_id !== undefined || termsInconsistency(terms) !== null
       || ![terms.total_minor, ...terms.items.flatMap(item => [item.unit_minor, item.quantity, item.unit_minor * item.quantity]),
-        ...terms.fees.map(fee => fee.amount_minor)].every(Number.isSafeInteger)
+        ...terms.fees.map(fee => fee.amount_minor), terms.items.reduce((sum, item) => sum + item.unit_minor * item.quantity, 0),
+        terms.fees.reduce((sum, fee) => sum + fee.amount_minor, 0)].every(Number.isSafeInteger)
       || !Array.isArray(quote.fees) || quote.fees.length !== terms.fees.length
-      || quote.fees.some((fee, index) => fee.amount_minor !== terms.fees[index]!.amount_minor)
+      || quote.fees.some((fee, index) => fee.amount_minor !== terms.fees[index]!.amount_minor
+        || (fee.code !== undefined && fee.code !== terms.fees[index]!.code))
       || !Number.isFinite(Date.parse(quote.expires_at))) throw protocol();
     let rawProof: unknown;
     try { rawProof = JSON.parse(input.authorization_proof); } catch { throw protocol(); }
@@ -195,18 +233,18 @@ export class HttpMerchantTransport implements MerchantPort {
     const item = wire.items[0]!;
     return {
       order_id: wire.order_id, purchase_attempt_id: wire.purchase_attempt_id, title: item.title,
-      quantity: item.quantity, currency: wire.currency, total_minor: wire.total_minor,
+      quantity: wire.items.reduce((sum, line) => sum + line.quantity, 0), currency: wire.currency, total_minor: wire.total_minor,
+      items: wire.items.map(line => ({ entry_id: line.entry_id, title: line.title, quantity: line.quantity,
+        unit_price_minor: line.unit_minor, line_total_minor: line.line_total_minor })),
       payment_status: wire.payment.status, fulfillment_status: wire.fulfillment_status.status,
       updated_at: wire.updated_at, merchant_id: wire.merchant_id, catalog_id: wire.catalog_id,
       quote_id: wire.quote_id, terms_hash: wire.terms_hash, entry_id: item.entry_id,
-      fulfillment: 'pickup', wire_terms: buildQuoteTerms(wire),
+      fulfillment: wire.fulfillment.method, ...(wire.fulfillment.delivery ? { delivery: wire.fulfillment.delivery } : {}), wire_terms: buildQuoteTerms(wire),
     };
   }
 
   private intent(intent: Intent) {
-    if (intent.merchant_id !== this.options.merchantId || intent.fulfillment !== 'pickup' || intent.currency !== 'CNY'
-      || !Number.isSafeInteger(intent.quantity) || intent.quantity < 1
-      || !Number.isSafeInteger(intent.max_total_minor) || intent.max_total_minor < 0) throw protocol();
+    try { parseIntent(intent, [this.options.merchantId]); } catch { throw protocol(); }
   }
   private candidate(candidate: Candidate) {
     if (candidate.merchant_id !== this.options.merchantId || candidate.catalog_id !== this.options.catalogId) throw protocol();
@@ -214,7 +252,8 @@ export class HttpMerchantTransport implements MerchantPort {
   }
   private wireQuote(quote: WireQuote) {
     if (quote.merchant_id !== this.options.merchantId || quote.catalog_id !== this.options.catalogId
-      || quote.items.length !== 1 || quote.fulfillment.method !== 'pickup' || quote.fulfillment.location_id !== undefined
+      || quote.items.length < 1 || quote.items.length > 10 || quote.fulfillment.location_id !== undefined
+      || new Set(quote.items.map(item => item.entry_id)).size !== quote.items.length
       || Date.parse(quote.expires_at) <= Date.parse(quote.created_at)
       || !this.amounts(quote) || quoteInconsistency(quote) !== null) throw protocol();
   }
@@ -240,16 +279,16 @@ export class HttpMerchantTransport implements MerchantPort {
   }
   private order(order: WireOrder, expectedId: string) {
     if (order.order_id !== expectedId || order.merchant_id !== this.options.merchantId || order.catalog_id !== this.options.catalogId
-      || order.items.length !== 1 || order.fulfillment.method !== 'pickup' || order.fulfillment.location_id !== undefined
+      || order.items.length < 1 || order.items.length > 10 || order.fulfillment.location_id !== undefined
+      || new Set(order.items.map(item => item.entry_id)).size !== order.items.length
       || Date.parse(order.updated_at) < Date.parse(order.created_at)
       || Date.parse(order.payment.updated_at) < Date.parse(order.created_at)
       || Date.parse(order.fulfillment_status.updated_at) < Date.parse(order.created_at)
-      || !this.amounts(order)) throw protocol();
-    // Order snapshots use exactly the same priced terms as quotes.
-    const syntheticQuote: WireQuote = { ...order, expires_at: order.updated_at };
-    if (quoteInconsistency(syntheticQuote) !== null) throw protocol();
+      ) throw protocol();
+    if (orderInconsistency(order) !== null) throw protocol();
   }
-  private async request(path: string, userId: string, body?: unknown, key?: string) {
+  private async request(path: string, userId: string, body?: unknown, key?: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const endpoint = trustedUrl(`${this.origin}${path}`, this.origin, [path]);
     const headers: Record<string, string> = { [DEV_CALLER_HEADER]: identifier(userId) };
     if (body !== undefined) headers['content-type'] = 'application/json';
@@ -257,16 +296,19 @@ export class HttpMerchantTransport implements MerchantPort {
     let response: Response;
     try {
       response = await this.fetcher(endpoint, { method: body === undefined ? 'GET' : 'POST', headers,
-        redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(this.timeoutMs),
+        redirect: 'error', credentials: 'omit', signal: requestSignal(signal, this.timeoutMs),
         ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     } catch (error) {
+      signal?.throwIfAborted();
       const timeout = error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name);
       throw new FlowError(timeout ? 'timeout' : 'network_error', timeout ? '商家请求超时，请查询原购买尝试。' : '无法连接商家，请查询原购买尝试。', 503);
     }
+    signal?.throwIfAborted();
     if (response.status >= 500) throw new FlowError('merchant_unavailable', '商家暂时无法确认结果，请查询原购买尝试。', 503);
     if (response.status >= 300 && response.status < 400) throw protocol();
     let value: unknown;
-    try { value = await response.json(); } catch { throw protocol(); }
+    try { value = await response.json(); } catch { signal?.throwIfAborted(); throw protocol(); }
+    signal?.throwIfAborted();
     if (!response.ok) {
       const { error } = parse(commerceErrorResponseSchema, value);
       if (COMMERCE_ERROR_HTTP_STATUS[error.code] !== response.status) throw protocol();

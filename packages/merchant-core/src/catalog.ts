@@ -78,7 +78,9 @@ export function catalogStockInconsistency(attributes: CoffeeEntryAttributes): st
 
 /** True when the entry can be bought right now. */
 export function isPurchasable(record: CatalogEntryRecord): boolean {
-  return record.attributes.inventory.availability_status !== 'out_of_stock';
+  // Unknown stock and preorders are visible in the catalog, but this demo only
+  // sells stock that can be fulfilled now.
+  return ['in_stock', 'low_stock'].includes(record.attributes.inventory.availability_status);
 }
 
 /**
@@ -309,7 +311,7 @@ export function buildResolvableReference(
         action_id: 'view',
         action_type: 'url',
         label: '打开商品页',
-        entrypoint: { url: `${config.publicBaseUrl}/products/${entry.entry_id}`, method: 'GET' },
+        entrypoint: { url: `${config.publicBaseUrl}/products/${encodeURIComponent(entry.entry_id)}`, method: 'GET' },
         auth_requirements: {},
         requires_user_confirmation: false,
       },

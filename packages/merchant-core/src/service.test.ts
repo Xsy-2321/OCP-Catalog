@@ -149,6 +149,57 @@ function checkoutBody(quote: Quote, attemptId: string, maxTotalMinor?: number): 
 
 /* ------------------------------------------------------ the OCP read surface */
 
+test('every advertised product view opens an escaped page with current persistent stock', async () => {
+  const catalog = loadCatalog(CATALOG_SEED.map(entry => entry.entry_id === 'entry_latte'
+    ? { ...entry, title: '拿铁 <script>alert(1)</script>', summary: 'Coffee & milk' } : entry));
+  await withServer({ catalog }, async server => {
+    const resolve = resolvableReferenceSchema.parse(await (await server.post('/ocp/resolve', { entry_id: 'entry_latte' })).json());
+    const url = resolve.action_bindings.find(action => action.action_id === 'view')!.entrypoint.url;
+    const response = await handleRequest(server.ctx, new Request(url));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    const html = await response.text();
+    expect(html).toContain('CNY 25.00');
+    expect(html).toContain('剩余 12 件');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('Coffee &amp; milk');
+    const quote = await quoteThrough(server);
+    expect((await server.post('/commerce/v1/checkouts', checkoutBody(quote, 'att_product_page'))).status).toBe(200);
+    expect(await (await handleRequest(server.ctx, new Request(url))).text()).toContain('剩余 11 件');
+    expect((await server.send('/products/not_found')).status).toBe(404);
+    expect((await server.send('/products/%ZZ')).status).toBe(400);
+  });
+});
+
+test('unknown stock and preorders are neither advertised as in stock nor accepted for purchase', async () => {
+  for (const availability_status of ['unknown', 'preorder']) {
+    const catalog = loadCatalog(CATALOG_SEED.map(entry => entry.entry_id === 'entry_latte'
+      ? { ...entry, attributes: { ...entry.attributes, inventory: { availability_status } } } : entry));
+    await withServer({ catalog }, async server => {
+      const response = await server.post('/ocp/query', { query: '拿铁', filters: { in_stock_only: true } });
+      expect((await response.json() as { entries: unknown[] }).entries).toEqual([]);
+      const quoteResponse = await server.post('/commerce/v1/quotes', { entry_id: 'entry_latte', quantity: 1, fulfillment: { method: 'pickup' } });
+      expect(quoteResponse.status).toBe(409);
+      expect((await envelope(quoteResponse)).code).toBe('out_of_stock');
+      expect(countOrders(server.ctx.db)).toBe(0);
+      expect(countPayments(server.ctx.db)).toBe(0);
+    });
+  }
+});
+
+test('stock becoming unknown after a quote prevents payment inside the reservation transaction', async () => {
+  await withServer({}, async server => {
+    const quote = await quoteThrough(server);
+    server.ctx.db.query("UPDATE inventory SET availability_status = 'unknown' WHERE entry_id = ?").run('entry_latte');
+    const response = await server.post('/commerce/v1/checkouts', checkoutBody(quote, 'att_unknown_stock'));
+    expect(response.status).toBe(409);
+    expect((await envelope(response)).code).toBe('out_of_stock');
+    expect(countOrders(server.ctx.db)).toBe(0);
+    expect(countPayments(server.ctx.db)).toBe(0);
+  });
+});
+
 describe('the read surface', () => {
   test('discovery points at every endpoint the merchant serves', async () => {
     await withServer({}, async (server) => {
@@ -350,7 +401,7 @@ describe('the commerce surface', () => {
       const response = await server.post('/commerce/v1/quotes', {
         entry_id: 'entry_latte',
         quantity: 1,
-        fulfillment: { method: 'delivery' },
+        fulfillment: { method: 'delivery', delivery: { recipient: '测试收件人', phone: '13800138000', address: '杭州市西湖区测试路1号' } },
       });
       expect(response.status).toBe(200);
 
@@ -366,9 +417,9 @@ describe('the commerce surface', () => {
   test('a fulfillment method the entry does not offer is a 400, not a surprise at checkout', async () => {
     await withServer({}, async (server) => {
       const response = await server.post('/commerce/v1/quotes', {
-        entry_id: 'entry_americano', // pickup only
+        entry_id: 'entry_gift_box', // pickup only
         quantity: 1,
-        fulfillment: { method: 'delivery' },
+        fulfillment: { method: 'delivery', delivery: { recipient: '测试收件人', phone: '13800138000', address: '杭州市西湖区测试路1号' } },
       });
 
       expect(response.status).toBe(400);

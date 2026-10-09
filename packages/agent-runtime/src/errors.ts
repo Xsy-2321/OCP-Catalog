@@ -20,5 +20,5 @@ export class ConfirmedPurchaseProtocolError extends FlowError {
 export function publicError(error: unknown): { code: string; message: string } {
   return error instanceof FlowError
     ? { code: error.code, message: error.message }
-    : { code: 'unavailable', message: '服务暂时不可用，请查询原购买尝试。' };
+    : { code: 'unavailable', message: '服务暂时不可用，请稍后重试。' };
 }

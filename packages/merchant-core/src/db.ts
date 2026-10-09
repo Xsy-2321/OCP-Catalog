@@ -15,7 +15,7 @@
  */
 import { Database } from 'bun:sqlite';
 
-export const MERCHANT_SCHEMA_VERSION = 2;
+export const MERCHANT_SCHEMA_VERSION = 3;
 
 /**
  * All statements are `IF NOT EXISTS`: opening an existing database must be a
@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS orders_caller_idx ON orders (caller_id);
 CREATE INDEX IF NOT EXISTS orders_attempt_idx ON orders (purchase_attempt_id);
+CREATE INDEX IF NOT EXISTS orders_merchant_catalog_page_idx
+  ON orders (merchant_id, catalog_id, created_at_ms DESC, order_id DESC);
 
 -- One row per logical purchase. The UNIQUE key is what makes a retry of the
 -- same attempt id return the original decision instead of charging twice.
@@ -120,11 +122,12 @@ CREATE TABLE IF NOT EXISTS inventory (
   PRIMARY KEY (merchant_id, entry_id)
 );
 CREATE TABLE IF NOT EXISTS inventory_reservations (
-  purchase_attempt_id TEXT PRIMARY KEY,
+  purchase_attempt_id TEXT NOT NULL,
   merchant_id TEXT NOT NULL,
   entry_id TEXT NOT NULL,
   quantity INTEGER NOT NULL CHECK (quantity > 0),
   state TEXT NOT NULL CHECK (state IN ('reserved', 'consumed', 'released')),
+  PRIMARY KEY (purchase_attempt_id, entry_id),
   FOREIGN KEY (merchant_id, entry_id) REFERENCES inventory (merchant_id, entry_id)
 );
 -- A v1 store could already have promised more than its seed stock. Keep that
@@ -140,17 +143,46 @@ CREATE TABLE IF NOT EXISTS inventory_debts (
 
 export function openMerchantDb(path: string): Database {
   const db = new Database(path, { create: true });
-  db.exec('PRAGMA foreign_keys = ON');
-  db.exec('PRAGMA busy_timeout = 5000');
-  // WAL keeps a reader from blocking the writer; irrelevant for :memory:, where
-  // SQLite reports "memory" and moves on.
-  db.exec('PRAGMA journal_mode = WAL');
-  db.exec(SCHEMA_SQL);
-  db.query('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)').run(
-    'schema_version',
-    String(MERCHANT_SCHEMA_VERSION),
-  );
-  return db;
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec('PRAGMA busy_timeout = 5000');
+    // WAL keeps a reader from blocking the writer; irrelevant for :memory:, where
+    // SQLite reports "memory" and moves on.
+    db.exec('PRAGMA journal_mode = WAL');
+    inTransaction(db, () => {
+      db.exec(SCHEMA_SQL);
+      const version = db.query<{ value: string }, []>("SELECT value FROM schema_meta WHERE key = 'schema_version'").get();
+      if (version && (!/^\d+$/.test(version.value) || Number(version.value) > MERCHANT_SCHEMA_VERSION)) {
+        throw new Error('merchant database uses an unsupported schema version');
+      }
+      const columns = db.query<{ name: string; pk: number }, []>('PRAGMA table_info(inventory_reservations)').all();
+      const primaryKey = columns.filter(column => column.pk > 0).sort((left, right) => left.pk - right.pk).map(column => column.name);
+      if (primaryKey.join(',') === 'purchase_attempt_id') {
+        // Copy all v2 reservations verbatim. Neither quotes/orders nor the
+        // available stock/debt ledger are reconstructed during this migration.
+        db.exec(`CREATE TABLE inventory_reservations_v3 (
+          purchase_attempt_id TEXT NOT NULL,
+          merchant_id TEXT NOT NULL,
+          entry_id TEXT NOT NULL,
+          quantity INTEGER NOT NULL CHECK (quantity > 0),
+          state TEXT NOT NULL CHECK (state IN ('reserved', 'consumed', 'released')),
+          PRIMARY KEY (purchase_attempt_id, entry_id),
+          FOREIGN KEY (merchant_id, entry_id) REFERENCES inventory (merchant_id, entry_id)
+        );
+        INSERT INTO inventory_reservations_v3 (purchase_attempt_id, merchant_id, entry_id, quantity, state)
+          SELECT purchase_attempt_id, merchant_id, entry_id, quantity, state FROM inventory_reservations;
+        DROP TABLE inventory_reservations;
+        ALTER TABLE inventory_reservations_v3 RENAME TO inventory_reservations;`);
+      } else if (primaryKey.join(',') !== 'purchase_attempt_id,entry_id') {
+        throw new Error('merchant inventory reservations use an unsupported primary key');
+      }
+      db.query('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)').run('schema_version', String(MERCHANT_SCHEMA_VERSION));
+    });
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 /**

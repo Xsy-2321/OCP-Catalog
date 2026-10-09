@@ -15,11 +15,14 @@
  * The response shapes match @ocp-catalog/ocp-schema; see server.test.ts, which
  * parses every response through those schemas to prove conformance.
  */
+import { catalogQueryRequestSchema, type CatalogQueryRequest } from '@ocp-catalog/ocp-schema';
 import { PRODUCTS, type Product } from './products';
 
 const CATALOG_ID = process.env.CATALOG_ID ?? 'cat_example_typescript';
 const CATALOG_NAME = process.env.CATALOG_NAME ?? 'Example TypeScript Catalog';
 const PROVIDER_ID = 'example_inmemory';
+const QUERY_PACK = 'ocp.query.keyword.v1';
+const QUERY_MODE = 'keyword';
 const PORT = Number(process.env.PORT ?? 4400);
 const BASE_URL = (process.env.PUBLIC_BASE_URL ?? `http://localhost:${PORT}`).replace(/\/$/, '');
 
@@ -68,9 +71,9 @@ function manifest() {
         description: 'Case-insensitive keyword match over the in-memory product list.',
         query_packs: [
           {
-            pack_id: 'ocp.query.keyword.v1',
+            pack_id: QUERY_PACK,
             description: 'Keyword search over title, summary, brand, and category.',
-            query_modes: ['keyword'],
+            query_modes: [QUERY_MODE],
           },
         ],
         supports_explain: true,
@@ -123,31 +126,48 @@ function toEntry(product: Product) {
   };
 }
 
-function query(body: { query?: string; limit?: number }) {
-  const term = (body.query ?? '').trim().toLowerCase();
-  const limit = Math.min(Math.max(body.limit ?? 20, 1), 50);
+function query(body: CatalogQueryRequest): Response {
+  // Protocol-valid fields must also fit this node's declared capability.
+  // An omitted mode retains the example's keyword/list-all default.
+  if (body.query_pack !== undefined && body.query_pack !== QUERY_PACK) {
+    return json({ error: { code: 'invalid_request', message: `unsupported query_pack: only ${QUERY_PACK} is supported` } }, 400);
+  }
+  if (body.query_mode !== undefined && body.query_mode !== QUERY_MODE) {
+    return json({ error: { code: 'invalid_request', message: `unsupported query_mode: only ${QUERY_MODE} is supported` } }, 400);
+  }
+  if (Object.keys(body.filters).length > 0) {
+    return json({ error: { code: 'invalid_request', message: 'unsupported filters: this keyword node does not support filter fields' } }, 400);
+  }
+  const rawCursor = body.cursor === undefined ? '0' : body.cursor;
+  if (typeof rawCursor !== 'string' || !/^\d+$/.test(rawCursor) || !Number.isSafeInteger(Number(rawCursor))) {
+    return json({ error: { code: 'invalid_request', message: 'cursor must be a non-negative decimal integer string' } }, 400);
+  }
+  const offset = Number(rawCursor);
+  const term = body.query.trim().toLowerCase();
+  const limit = body.limit;
   const matches = term
     ? PRODUCTS.filter((p) =>
         [p.title, p.summary, p.brand, p.category].some((f) => f.toLowerCase().includes(term)),
       )
     : PRODUCTS;
-  const page = matches.slice(0, limit);
-  return {
+  const page = matches.slice(offset, offset + limit);
+  const hasMore = offset + page.length < matches.length;
+  return json({
     ocp_version: '1.0',
     kind: 'CatalogQueryResult',
     id: `qry_${crypto.randomUUID()}`,
     catalog_id: CATALOG_ID,
-    query_pack: 'ocp.query.keyword.v1',
-    query_mode: 'keyword',
+    query_pack: QUERY_PACK,
+    query_mode: QUERY_MODE,
     query: body.query ?? '',
     result_count: page.length,
-    page: { limit, offset: 0, has_more: false },
+    page: { limit, offset: 0, has_more: hasMore, ...(hasMore ? { next_cursor: String(offset + page.length) } : {}) },
     entries: page.map((product) => ({
       entry: toEntry(product),
       score: 1,
       explain: [`Keyword match for "${body.query ?? ''}".`],
     })),
-  };
+  });
 }
 
 function resolve(body: { entry_id?: string }) {
@@ -192,10 +212,13 @@ function resolve(body: { entry_id?: string }) {
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
   try {
-    const parsed = await request.json();
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    const parsed: unknown = await request.json();
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('request body must be a JSON object');
+    }
+    return parsed as Record<string, unknown>;
   } catch {
-    return {};
+    throw new Error('request body must be a valid JSON object');
   }
 }
 
@@ -207,8 +230,21 @@ export async function handle(request: Request): Promise<Response> {
   if (method === 'GET' && pathname === '/ocp/manifest') return json(manifest());
   if (method === 'GET' && pathname === '/ocp/health') return json(health());
   if (method === 'GET' && pathname === '/ocp/contracts') return json(contracts());
-  if (method === 'POST' && pathname === '/ocp/query') return json(query(await readJson(request)));
-  if (method === 'POST' && pathname === '/ocp/resolve') return resolve(await readJson(request));
+  if (method === 'POST' && (pathname === '/ocp/query' || pathname === '/ocp/resolve')) {
+    let body: Record<string, unknown>;
+    try { body = await readJson(request); }
+    catch (error) {
+      return json({ error: { code: 'invalid_request', message: (error as Error).message } }, 400);
+    }
+    if (pathname === '/ocp/query') {
+      const parsed = catalogQueryRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        return json({ error: { code: 'invalid_request', message: 'invalid catalog query request' } }, 400);
+      }
+      return query(parsed.data);
+    }
+    return resolve(body);
+  }
 
   return json({ error: { code: 'not_found', message: `No route for ${method} ${pathname}` } }, 404);
 }

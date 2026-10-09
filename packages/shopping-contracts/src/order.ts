@@ -14,54 +14,62 @@
  * it is a query endpoint that leaks it. The reference stays server-side.
  */
 import { z } from 'zod';
-import { quoteFeeLineSchema, quoteLineItemSchema } from './quote';
-import { quoteFulfillmentSchema } from './terms';
+import { orderSchema, type Order } from './order-schema';
+import { buildQuoteTerms } from './quote';
+import { computeTermsHash, termsInconsistency } from './terms';
 
-export const paymentStatusSchema = z.enum(['pending', 'paid', 'failed', 'unknown']);
+export * from './order-schema';
 
-export type PaymentStatus = z.infer<typeof paymentStatusSchema>;
+/**
+ * Checks the purchased snapshot independently of transport and persistence.
+ * Caller/merchant identity and indexed storage scope remain boundary checks.
+ * A reason is returned without changing or repairing the order.
+ */
+export function orderInconsistency(order: Order): string | null {
+  if (!orderSchema.safeParse(order).success) return 'order does not match its field schema';
+  if (new Set(order.items.map(item => item.entry_id)).size !== order.items.length) {
+    return 'order contains duplicate item identities';
+  }
+  const createdAt = Date.parse(order.created_at);
+  if ([order.updated_at, order.payment.updated_at, order.fulfillment_status.updated_at]
+    .some(timestamp => Date.parse(timestamp) < createdAt)) {
+    return 'order update timestamp precedes its creation';
+  }
 
-export const fulfillmentStatusSchema = z.enum(['pending', 'ready', 'completed', 'cancelled']);
-
-export type FulfillmentStatus = z.infer<typeof fulfillmentStatusSchema>;
-
-export const orderPaymentSchema = z
-  .object({
-    status: paymentStatusSchema,
-    updated_at: z.string().datetime(),
-  })
-  .strict();
-
-export const orderFulfillmentSchema = z
-  .object({
-    status: fulfillmentStatusSchema,
-    updated_at: z.string().datetime(),
-  })
-  .strict();
-
-export const orderSchema = z
-  .object({
-    order_id: z.string().min(1),
-    merchant_id: z.string().min(1),
-    catalog_id: z.string().min(1),
-    purchase_attempt_id: z.string().min(1),
-    quote_id: z.string().min(1),
-    currency: z.string().regex(/^[A-Z]{3}$/),
-    /** Snapshot of the purchased selection, frozen at order time. */
-    items: z.array(quoteLineItemSchema).min(1),
-    fees: z.array(quoteFeeLineSchema),
-    subtotal_minor: z.number().int().nonnegative(),
-    total_minor: z.number().int().nonnegative(),
-    terms_hash: z.string().regex(/^[0-9a-f]{64}$/),
-    fulfillment: quoteFulfillmentSchema,
-    payment: orderPaymentSchema,
-    fulfillment_status: orderFulfillmentSchema,
-    created_at: z.string().datetime(),
-    updated_at: z.string().datetime(),
-  })
-  .strict();
-
-export type Order = z.infer<typeof orderSchema>;
+  let subtotal = 0;
+  for (const item of order.items) {
+    const expected = item.unit_minor * item.quantity;
+    if (![item.quantity, item.unit_minor, item.line_total_minor, expected].every(Number.isSafeInteger)) {
+      return `line ${item.entry_id}: amounts or product exceed the safe integer range`;
+    }
+    if (item.line_total_minor !== expected) {
+      return `line ${item.entry_id}: line_total_minor ${item.line_total_minor} != ${item.unit_minor} x ${item.quantity}`;
+    }
+    subtotal += item.line_total_minor;
+    if (!Number.isSafeInteger(subtotal)) return 'item subtotal exceeds the safe integer range';
+  }
+  if (!Number.isSafeInteger(order.subtotal_minor) || order.subtotal_minor !== subtotal) {
+    return `subtotal_minor ${order.subtotal_minor} != sum of line totals ${subtotal}`;
+  }
+  let fees = 0;
+  for (const fee of order.fees) {
+    if (!Number.isSafeInteger(fee.amount_minor)) return `fee ${fee.code}: amount exceeds the safe integer range`;
+    fees += fee.amount_minor;
+    if (!Number.isSafeInteger(fees)) return 'fee total exceeds the safe integer range';
+  }
+  const expectedTotal = subtotal + fees;
+  if (!Number.isSafeInteger(order.total_minor) || !Number.isSafeInteger(expectedTotal)) {
+    return 'order total exceeds the safe integer range';
+  }
+  if (order.total_minor !== expectedTotal) {
+    return `total_minor ${order.total_minor} != subtotal ${subtotal} plus fees ${fees}`;
+  }
+  const terms = buildQuoteTerms(order);
+  const termsProblem = termsInconsistency(terms);
+  if (termsProblem !== null) return termsProblem;
+  if (computeTermsHash(terms) !== order.terms_hash) return 'terms_hash does not match the order contents';
+  return null;
+}
 
 export const purchaseEventSubjectTypeSchema = z.enum(['quote', 'attempt', 'order']);
 

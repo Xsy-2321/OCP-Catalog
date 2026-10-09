@@ -2,25 +2,44 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>一杯之间 · 本地购物助手</title>
-  <link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script>
+  <title>一杯之间 · 用户演示购物助手</title>
+  <link rel="stylesheet" href="/styles.css"><script src="/app.js" type="module"></script>
 </head>
 <body>
   <div class="page">
-    <header><a class="brand" href="/" aria-label="一杯之间首页"><span class="brand-icon">☕</span><span>一杯之间<small>YOUR COFFEE COMPANION</small></span></a><span class="mode"><i></i> <span id="mode-label">本地模拟付款</span></span></header>
+    <header><a class="brand" href="/" aria-label="一杯之间用户演示首页"><span class="brand-icon">☕</span><span>一杯之间<small>USER DEMO / COFFEE COMPANION</small></span></a><nav class="demo-nav" id="demo-navigation" aria-label="演示视角" hidden><a href="/demo">演示入口</a><a href="/" aria-current="page">用户演示</a><a href="/merchant">商家演示（只读）</a></nav><span class="mode" id="connection-badge"><i></i> <span id="mode-label">正在检查连接</span></span></header>
     <main>
-      <section class="intro"><p class="eyebrow">A LITTLE COFFEE. A CLEAR DECISION.</p><h1>从一句想喝，<br>到一杯安心。</h1><p>找到喜欢的咖啡，看看完整的价格。<br>每一次购买，都由你亲自确认。</p><div class="intro-note" id="runtime-note">本地模拟付款 · 真实模型未配置</div></section>
+      <section class="intro"><p class="demo-identity">用户演示 · 本机演示身份，非账号登录</p><p class="eyebrow">A LITTLE COFFEE. A CLEAR DECISION.</p><h1>从一句想喝，<br>到一杯安心。</h1><p>找到喜欢的咖啡，看看完整的价格。<br>每一次购买，都由你亲自确认。</p><div class="intro-note" id="runtime-note">正在检查商家与模型配置。</div><button class="text-button" id="connection-check" type="button">重新检查连接</button></section>
       <section class="workspace" aria-label="咖啡购物流程">
-        <nav class="steps" aria-label="流程步骤"><span data-step="0">01 说说需求</span><span data-step="1">02 看看候选</span><span data-step="2">03 确认报价</span><span data-step="3">04 查看订单</span></nav>
-        <section class="request-card"><div class="section-heading"><div><p class="eyebrow">LET'S START HERE</p><h2>今天，想喝什么？</h2></div><span class="shop-tag">本地咖啡店 · 自取</span></div>
-          <form id="intent-form"><label for="query">商品关键词（当前为固定搜索流程）</label><textarea id="query" maxlength="500" rows="2" required>拿铁</textarea><div class="form-row"><label for="budget">总预算（含所有费用）<div class="input-wrap"><span>¥</span><input id="budget" type="text" inputmode="decimal" value="30.00" required></div></label><label for="quantity">杯数<input id="quantity" type="number" min="1" max="20" value="1" required></label><button class="primary" type="submit" id="search-button">寻找咖啡 <span>↗</span></button></div></form>
-        </section>
+        <nav class="steps" aria-label="流程步骤"><button type="button" data-step="0" class="active" aria-current="step">01 说说需求</button><button type="button" data-step="1" disabled>02 看看候选</button><button type="button" data-step="2" disabled>03 确认报价</button><button type="button" data-step="3" disabled>04 查看订单</button></nav>
+        <div class="flow-navigation"><button id="flow-back" class="flow-back" type="button" disabled><span aria-hidden="true">←</span> 返回上一步</button><div class="flow-guidance"><p id="flow-progress" aria-live="polite" aria-atomic="true">第 1 / 4 步 · 说说需求</p></div></div>
         <div id="notice" role="status" aria-live="polite" hidden></div>
-        <section id="candidates-section" hidden><div class="section-heading"><h2>为你找到的咖啡</h2><span class="muted">目录价 · 最终费用请看报价</span></div><div id="candidates" class="candidates"></div></section>
-        <section id="quote-section" class="quote-card" hidden><div class="section-heading"><div><p class="eyebrow">THE COMPLETE PRICE</p><h2>确认前，再看一眼</h2></div><span id="expiry" class="muted"></span></div><div id="quote-content"></div><p class="confirmation-note">确认仅授权这份报价、这次模拟购买。报价变化后需重新确认。</p><div class="actions"><button class="primary" id="confirm-button" type="button">确认并模拟购买</button><button class="secondary" id="cancel-button" type="button">取消本次购买</button></div></section>
-        <section id="order-section" class="order-card" hidden><p class="eyebrow">YOUR ORDER</p><h2 id="order-heading">购买状态</h2><div id="order-content"></div><button class="secondary" id="recover-button" type="button">查询原购买结果</button></section>
-        <div class="empty" id="empty"><span class="cup-line">☕</span><p>一杯好咖啡，从你的选择开始。</p><small>所有价格与订单均为固定开发样例。</small></div>
-        <footer>人民币整数分计价 · 全部收费可见 · 逐笔确认</footer>
+        <section id="recovery-card" class="recovery-card" aria-label="未决购买" hidden><div class="recovery-heading"><h2 tabindex="-1">未决购买</h2><button class="text-button" id="pending-check" type="button">查找未决购买</button></div><p class="helper-text" id="pending-note">正在检查此浏览器身份的购买记录。</p><div id="pending-list"></div></section>
+        <div id="flow-viewport" class="flow-viewport"><div id="flow-track" class="flow-track">
+        <section id="flow-panel-0" class="flow-panel is-active" data-flow-panel="0" aria-label="第 1 步：说说需求"><div data-flow-context></div>
+        <section class="request-card"><div class="section-heading"><div><p class="eyebrow">LET'S START HERE</p><h2 tabindex="-1">今天，想喝什么？</h2></div><span class="shop-tag">本地咖啡店 · 自取 / 配送</span></div>
+          <form id="intent-form">
+            <fieldset class="mode-picker"><legend>使用方式</legend><label><input type="radio" name="flow-mode" value="manual" checked>关键词检索</label><label><input type="radio" name="flow-mode" value="agent">Agent 帮我选</label></fieldset>
+            <div id="manual-controls"><div id="single-query"><label for="query">商品关键词</label><textarea id="query" maxlength="500" rows="2" required>拿铁</textarea></div><label class="inline-choice"><input id="mixed-basket" type="checkbox">一次购买不同商品</label><div id="basket-editor" hidden><div id="basket-lines"></div><button id="add-basket-line" class="secondary" type="button">添加一种商品</button><p class="helper-text">每行填写关键词与杯数，搜索后为每行选一种商品，合成一笔报价。</p></div></div>
+            <div id="agent-controls" hidden><label for="agent-message">说说你的偏好</label><textarea id="agent-message" maxlength="1000" rows="3" placeholder="想喝一杯热咖啡，偏爱奶香，请帮我比较并推荐。"></textarea><p class="helper-text" id="model-note" role="status"></p></div>
+            <div class="form-row"><label for="budget">总预算（含所有费用）<div class="input-wrap"><span>¥</span><input id="budget" type="text" inputmode="decimal" value="30.00" required></div></label><label for="quantity">总杯数<input id="quantity" type="number" min="1" max="20" value="1" required></label><button class="primary" type="submit" id="search-button">寻找咖啡 <span>↗</span></button></div>
+            <label for="fulfillment">取餐方式<select id="fulfillment"><option value="pickup">到店自取</option><option value="delivery">配送（本地模拟）</option></select></label>
+            <fieldset id="delivery-fields" hidden><legend>配送信息</legend><div class="delivery-row"><label for="delivery-recipient">收件人<input id="delivery-recipient" autocomplete="name" maxlength="60"></label><label for="delivery-phone">联系电话<input id="delivery-phone" type="tel" autocomplete="tel" maxlength="20"></label></div><label for="delivery-address">详细地址<textarea id="delivery-address" autocomplete="street-address" maxlength="300" rows="2" placeholder="请填写详细地址，包括楼栋、房间号。"></textarea></label><p class="helper-text">配送信息仅用于本地模拟订单，不发送给模型。是否支持配送和最终费用以商家报价为准。</p></fieldset>
+            <p class="helper-text" id="budget-note">同一商家最多 10 种需求、合计 1–20 杯，可自取或配送。Agent 模式请填写总杯数；预算包括配送费，每笔由你确认。</p><p class="helper-text" id="draft-note" hidden>需求已修改，请重新提交后再确认报价。</p>
+          </form>
+        </section>
+        </section>
+        <section id="flow-panel-1" class="flow-panel" data-flow-panel="1" aria-label="第 2 步：看看候选" aria-hidden="true" inert><div data-flow-context><section class="planning-card" id="planning-section" hidden><p class="eyebrow">A CLEAR CHOICE</p><h2 id="planning-heading" tabindex="-1">选择依据</h2><p id="planning-explanation"></p><ol id="safety-steps"></ol><p class="helper-text">推荐说明不构成购买授权，最终以商家报价和你的确认结果为准。</p></section></div>
+        <section id="candidates-section" hidden><div class="section-heading"><h2 tabindex="-1">为你找到的咖啡</h2><span class="muted">目录价 · 最终费用请看报价</span></div><div id="candidates" class="candidates"></div></section>
+        <div class="empty" id="empty" hidden><span class="cup-line">☕</span><p>一杯好咖啡，从你的选择开始。</p><small>所有价格与订单均为固定开发样例。</small></div>
+        </section>
+        <section id="flow-panel-2" class="flow-panel" data-flow-panel="2" aria-label="第 3 步：确认报价" aria-hidden="true" inert><div data-flow-context></div>
+        <section id="quote-section" class="quote-card" hidden><div class="section-heading"><div><p class="eyebrow">THE COMPLETE PRICE</p><h2 tabindex="-1">确认前，再看一眼</h2></div><span id="expiry" class="muted"></span></div><div id="quote-content"></div><p class="confirmation-note">确认仅授权这份报价、这次模拟购买。报价变化后需重新确认。</p><div class="actions"><button class="primary" id="confirm-button" type="button">确认并模拟购买</button><button class="secondary" id="cancel-button" type="button">取消本次购买</button></div></section>
+        </section>
+        <section id="flow-panel-3" class="flow-panel" data-flow-panel="3" aria-label="第 4 步：查看订单" aria-hidden="true" inert><div data-flow-context></div>
+        <section id="order-section" class="order-card" hidden><p class="eyebrow">YOUR ORDER</p><h2 id="order-heading" tabindex="-1">购买状态</h2><div id="order-content"></div><button class="secondary" id="recover-button" type="button">查询原购买结果</button></section>
+        </section>
+        </div></div>
       </section>
     </main><div class="page-footer"><span>OCP CATALOG / SHOPPING AGENT</span><span>本地演示 · 模拟付款 · 用户逐笔确认</span></div>
   </div>

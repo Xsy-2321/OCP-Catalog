@@ -110,6 +110,15 @@ describe('loadConfig', () => {
     expect(config.publicBaseUrl).toBe('http://example.test:9000');
   });
 
+  test('rejects unusable advertised URLs before discovery and Resolve can fail', () => {
+    for (const value of ['merchant.local', 'ftp://example.test', 'https://example.test/demo',
+      'https://user:password@example.test', 'https://example.test/?q=1', 'https://example.test/#fragment']) {
+      expect(problemsFrom({ ...DB_ENV, [ENV.publicBaseUrl]: value }).join('\n')).toContain(ENV.publicBaseUrl);
+    }
+    expect(loadConfig({ env: { ...DB_ENV, [ENV.publicBaseUrl]: 'https://Example.test:443/' } }).publicBaseUrl)
+      .toBe('https://example.test');
+  });
+
   describe('trusted keys', () => {
     test('loads an ed25519 public key under its key id', () => {
       const config = loadConfig({
