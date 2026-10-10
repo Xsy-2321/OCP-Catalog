@@ -20,12 +20,12 @@
   --coffee-cream: #f7f3eb;
   --coffee-latte: #efe5d5;
   --coffee-paper: #fffefa;
-  --coffee-muted: #88796d;
+  --coffee-muted: #786b60;
   --coffee-line: #ede4d6;
 
   /* Backward compatibility for existing selectors and variables */
   --green: #2e231c;
-  --muted: #88796d;
+  --muted: #786b60;
   --line: #ede4d6;
 }
 
@@ -569,7 +569,7 @@ main {
 }
 
 .section-heading .eyebrow {
-  color: #88796d;
+  color: var(--coffee-muted);
   margin-bottom: 8px;
 }
 
@@ -644,7 +644,7 @@ input:focus {
   left: 14px;
   top: 12px;
   font-size: 13px;
-  color: #88796d;
+  color: var(--coffee-muted);
 }
 
 .input-wrap input {
@@ -811,7 +811,7 @@ button:disabled {
   font-size: 10px;
   font-family: var(--font-sans);
   margin-left: 6px;
-  color: #88796d;
+  color: var(--coffee-muted);
   font-weight: normal;
 }
 
@@ -889,7 +889,7 @@ button:disabled {
 
 .order-card .eyebrow {
   margin-bottom: 10px;
-  color: #88796d;
+  color: var(--coffee-muted);
 }
 
 .order-card h2 {
@@ -929,7 +929,7 @@ button:disabled {
 .empty {
   text-align: center;
   padding: 28px 0 42px;
-  color: #88796d;
+  color: var(--coffee-muted);
 }
 
 .cup-line {

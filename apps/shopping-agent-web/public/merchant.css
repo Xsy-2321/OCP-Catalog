@@ -35,6 +35,14 @@
   line-height: 1.9;
 }
 
+/* The hero eyebrow sits on the dark page backdrop. Without an explicit color
+   it inherits body's #2c221a and reads at 1.25:1. Reuse the warm tone already
+   used by .planning-card .eyebrow for eyebrows on dark surfaces. */
+.demo-hero > p.eyebrow,
+.merchant-hero > div > p.eyebrow {
+  color: #caa485;
+}
+
 .demo-disclosure {
   border-left: 3px solid #8c6d4f;
   padding: 15px 20px;
@@ -100,7 +108,7 @@
 }
 
 .demo-entry-card .eyebrow {
-  color: #88796d;
+  color: var(--coffee-muted);
 }
 
 .demo-entry-card > p:not(.eyebrow) {
@@ -486,7 +494,7 @@
 
 .detail-heading .eyebrow {
   margin-bottom: 7px;
-  color: #88796d;
+  color: var(--coffee-muted);
 }
 
 #order-detail {
