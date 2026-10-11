@@ -1,11 +1,12 @@
 # C0 契约：购物交易接口（本地整合候选）
 
-- **契约版本**：`SHOPPING_CONTRACT_VERSION = 1.1.0`
+- **契约版本**：`SHOPPING_CONTRACT_VERSION = 1.2.0`
 - **冻结日期**：2026-10-07
 - **维护者**：项目维护者（独立维护 A/B 两侧）
 - **整合澄清日期**：2026-10-07；新增整篮报价和配送信息，兼容既有单商品自取请求及已保存的报价、订单
 - **版本更正日期**：2026-10-09；0.2.0 只升了次版本号，但该次改动把订单支付字段由 `payment_status` 改名为 `payment`，而 `orderSchema` 在 0.1.0 就已经是线上响应 schema ⇒ 按 §14 规则 2 属破坏性变更，故更正为 `1.0.0`。无新增代码改动
 - **增补日期**：2026-10-11；新增只读端点 `GET /commerce/v1/orders/:id/events`（订单状态变更历史）⇒ 按 §14 规则 1 升次版本号 `1.0.0` → `1.1.0`。纯增量，A 侧无需改动即可继续工作
+- **增补日期**：2026-10-11（第二批）；① 新增只读端点 `GET /commerce/v1/purchase-attempts/:id/events`，并把报价主体并入订单事件流；② 新增**仅测试模式**下的操作员端点 `POST /commerce/v1/orders/:id/fulfillment`，使订单履约状态首次可推进 ⇒ 按 §14 规则 1 升次版本号 `1.1.0` → `1.2.0`。纯增量，A 侧无需改动（新增的履约取值 `ready`/`completed`/`cancelled` 均已在 A 侧 `views.ts` 接受的取值集内）
 - **当前状态**：已由维护者合入 `main`（`8527358`，PR #1）；本文档与 `packages/shopping-contracts/` 仍为契约描述
 - **落地代码**：`packages/shopping-contracts/`、`fixtures/shopping/`
 
@@ -29,7 +30,7 @@
 | 报价与 `terms_hash` | [`src/quote.ts`](../../packages/shopping-contracts/src/quote.ts) |
 | 金额换算 | [`src/money.ts`](../../packages/shopping-contracts/src/money.ts) |
 | 错误码与 HTTP 映射 | [`src/errors.ts`](../../packages/shopping-contracts/src/errors.ts) |
-| 五个端点的请求/响应 | [`src/http.ts`](../../packages/shopping-contracts/src/http.ts) |
+| 七个端点的请求/响应 | [`src/http.ts`](../../packages/shopping-contracts/src/http.ts) |
 | 固定测试数据 | [`fixtures/shopping/`](../../fixtures/shopping/README.md) |
 
 **两个函数绝对不能各写一份**：
@@ -95,9 +96,14 @@ A 从 Catalog 搜到商品
         │      ├─ 200 confirmed   ─► 付款完成，订单已存在
         │      └─ 202 processing  ─► 结果未知，请轮询 attempt
         │
-        ├─► GET /commerce/v1/purchase-attempts/:id
+        ├─► GET /commerce/v1/purchase-attempts/:id       读 attempt（此读会补完一次拖欠的结算）
+        ├─► GET /commerce/v1/purchase-attempts/:id/events  该 attempt 的历史（只读，不结算）
         ├─► GET /commerce/v1/orders/:id
-        └─► GET /commerce/v1/orders/:id/events      订单状态变更历史（只读）
+        ├─► GET /commerce/v1/orders/:id/events      订单状态变更历史（只读）
+        │
+   商家操作员（仅 MERCHANT_TEST_MODE=1 下存在）
+        │
+        └─► POST /commerce/v1/orders/:id/fulfillment   推进履约状态：ready / completed / cancelled
 ```
 
 **B 只维护事实**：价格、库存、能否成交、付款状态、订单记录。
@@ -334,11 +340,49 @@ A 的错误处理必须把跨调用者的 404 保持为未知结果，不能据�
 
 **订单事件读端点（2026-10-11 增补）**：`GET /commerce/v1/orders/:id/events` 返回
 该订单的状态变更历史，`200` 体为 `orderEventsResponseSchema`（`{order_id, events}`）。
-它聚合**两个 subject**——订单自身的 `order.created`，及其 `purchase_attempt_id` 下的
-`attempt.*` / `payment.*`。订单因该 attempt 成交而存在，其历史早于订单行本身；只返回
-`order` subject 会把"付款成功"这一**订单存在的原因**挡在外面。所有权走与
-`GET /commerce/v1/orders/:id` 完全相同的 `requireOwnedOrder`：事件流点名 attempt、
-quote 与 payment，无作用域的读会把端点变成确认他人购买 id 的预言机。
+它聚合**三个 subject**——报价的 `quote.created`、订单自身的 `order.created`，及其
+`purchase_attempt_id` 下的 `attempt.*` / `payment.*`。订单因该 attempt 成交而存在，
+而该 attempt 又是在某个报价上成交的：只返回 `order` subject 会把"付款成功"这一
+**订单存在的原因**挡在外面，并且会把 `quote.created`——唯一记录了买家授权时那个价格的
+记录——永远留在库里无人可读。所有权走与 `GET /commerce/v1/orders/:id` 完全相同的
+`requireOwnedOrder`：事件流点名 attempt、quote 与 payment，无作用域的读会把端点变成
+确认他人购买 id 的预言机。
+
+**attempt 事件读端点（2026-10-11 第二批）**：`GET /commerce/v1/purchase-attempts/:id/events`
+返回该 attempt 的历史，`200` 体为 `attemptEventsResponseSchema`（`{purchase_attempt_id, events}`），
+聚合 attempt 与其报价两个 subject。这是**失败路径**的读表面，而订单事件端点覆盖不到它：
+后者以订单为起点，因此一次被拒绝、超时、或仍停在 `processing` 的结账**没有订单**可挂靠，
+其 `payment.failed` / `attempt.failed` 记录在加这个端点之前是**只写不读**的——而它们恰好
+是一次丢了响应的 agent 最需要读回来的东西。
+
+该端点**刻意是纯读**：与 `GET /commerce/v1/purchase-attempts/:id` 不同，它**不**补完一次
+拖欠的结算。让"读历史"顺手完成一笔付款，意味着观察者制造了它所观察的东西；一个轮询证据的
+调用者，会变成证据出现的原因。补完结算仍然只有 attempt 读那条路径。
+
+**履约推进端点（2026-10-11 第二批，仅 `MERCHANT_TEST_MODE=1`）**：
+`POST /commerce/v1/orders/:id/fulfillment`，体为 `{status: 'ready'|'completed'|'cancelled'}`，
+返回更新后的 `Order`。在此之前 `fulfillment_status` 是一句**空承诺**：schema 里声明了
+`ready`/`completed`/`cancelled`，事件枚举里有 `order.fulfillment_changed`，而**没有任何
+代码写过它们**，订单永远停在 `pending`。
+
+推进由 `orders.ts` 的状态机裁定（`pending → ready|cancelled`；`ready → completed|cancelled`；
+两个终态无出边），非法迁移回 `invalid_request` 400 并带 `{from, to}`。`pending` **不在**
+请求 schema 的可选值内：它是一切订单的起点，允许它就意味着可以把已完结的订单往回改，
+而商家对"咖啡已经递出去了"的正确答复是**退款**——那是另一个事实，这行记录不得靠改自己来伪造。
+
+该端点**不要求 caller 身份**，因为商家的操作员身份在这套 demo 里**不存在**（`x-dev-caller-id`
+指的是**买家**，买家无权把自己的咖啡标记为已备好）。所以它按 `MERCHANT_TEST_MODE` 开关，
+而非假装做了鉴权：非测试模式下它根本不是一条路由，调用者得到与任何未知路径相同的
+`not_found`——这既是诚实答案，也不泄漏任何信息。真实部署需要在这里放一个**商家凭证**；
+再加一个可伪造的 header 冒充鉴权，比留一个诚实的缺口更糟。
+
+⚠️ **已知的跨侧词汇表分歧（须与 A 对齐，B 不得单方面"修"）**：A 侧 `views.ts` /
+`agent-runtime/src/types.ts` 接受六个履约取值，比 B 的四个多出 `preparing` 与 `collected`。
+B 本次开始发出的 `ready`/`completed`/`cancelled` **都在 A 已接受的集合内**，因此不构成破坏。
+但 A 的 **mock** 发的是 `'preparing'`（`mock-transport.ts`），A 的测试也断言它
+（`coordinator.test.ts`）——即 **A 的绿灯建立在一个真商家结构上永远说不出的取值上**。
+这是 A 侧的问题（其 mock 的词汇表比真商家更丰富），应在 A 侧修，或明确降级
+`views.ts` 的取值集以反映真商家能力。
 
 事件为**存储原样返回**，读取侧不做二次过滤。脱敏只在写入侧执行一次（`assertRedacted`），
 这与本节的立场一致：规则一旦靠"记得别传那个字段"维护就会腐烂，再加一层不同的读时过滤

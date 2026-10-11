@@ -17,7 +17,7 @@
  * This is the **wire contract** version. It is independent of the `version`
  * field in this package's package.json, which tracks npm packaging instead.
  */
-export const SHOPPING_CONTRACT_VERSION = '1.1.0';
+export const SHOPPING_CONTRACT_VERSION = '1.2.0';
 
 /** Domain separator mixed into the canonical terms serialization. */
 export const TERMS_DOMAIN = 'ocp.demo.terms.v1';

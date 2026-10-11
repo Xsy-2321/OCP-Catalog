@@ -28,6 +28,7 @@ import {
   DEV_CALLER_HEADER,
   EXPECTED_FILTERABLE_FIELD_REFS,
   IDEMPOTENCY_KEY_HEADER,
+  attemptEventsResponseSchema,
   checkoutResponseSchema,
   orderEventsResponseSchema,
   orderResponseSchema,
@@ -512,15 +513,20 @@ describe('the commerce surface', () => {
       // The order exists because the attempt settled, so its history has to
       // carry the payment and the attempt too. A stream of only `order.created`
       // would hide the reason the order is there at all.
+      //
+      // `quote.created` leads because it happened first and because it is the
+      // only record of the price the buyer authorized: nothing else returns it.
       expect(history.events.map((event) => event.type)).toEqual([
+        'quote.created',
         'attempt.created',
         'payment.succeeded',
         'order.created',
         'attempt.confirmed',
       ]);
-      // Only the two subjects this caller owns appear; nothing else rode along.
+      // Only the subjects this caller's purchase spans appear; nothing rode along.
       expect(
-        history.events.every((event) => [settled.order.order_id, attemptId].includes(event.subject_id)),
+        history.events.every((event) =>
+          [settled.order.order_id, attemptId, quote.quote_id].includes(event.subject_id)),
       ).toBe(true);
     });
   });
@@ -566,6 +572,200 @@ describe('the commerce surface', () => {
         jsonRequest(base, {}, { headers: { [DEV_CALLER_HEADER]: CALLER } }),
       );
       expect(posted.status).toBe(404);
+    });
+  });
+
+  test('an attempt that never became an order still has a readable history', async () => {
+    // The order route cannot reach this attempt: it begins at an order, and a
+    // declined checkout never produced one. Before the attempt route these
+    // records were written and read back by nothing.
+    await withServer({ faults: ['payment_declined'] }, async (server) => {
+      const quote = await quoteThrough(server);
+      const attemptId = 'att_declined_1';
+      const refused = await server.post('/commerce/v1/checkouts', checkoutBody(quote, attemptId));
+      expect(refused.status).toBe(402);
+
+      const response = await handleRequest(
+        server.ctx,
+        new Request(server.url(`/commerce/v1/purchase-attempts/${attemptId}/events`), {
+          headers: { [DEV_CALLER_HEADER]: CALLER },
+        }),
+      );
+      expect(response.status).toBe(200);
+
+      const history = attemptEventsResponseSchema.parse(await readBody(response));
+      expect(history.purchase_attempt_id).toBe(attemptId);
+      expect(history.events.map((event) => event.type)).toEqual([
+        'quote.created',
+        'attempt.created',
+        'payment.failed',
+        'attempt.failed',
+      ]);
+    });
+  });
+
+  test('reading an attempt history does not settle the attempt it describes', async () => {
+    // A read that finishes a payment means the observer produced the thing it
+    // observed. `GET /purchase-attempts/:id` is allowed to settle — that is how
+    // an in-doubt purchase is resolved — and this route deliberately is not, or
+    // a caller polling for evidence would be the cause of the evidence.
+    await withServer({ faults: ['payment_timeout_then_succeed'] }, async (server) => {
+      const quote = await quoteThrough(server);
+      const attemptId = 'att_pending_read';
+      const accepted = await server.post('/commerce/v1/checkouts', checkoutBody(quote, attemptId));
+      expect(accepted.status).toBe(202);
+
+      const history = await handleRequest(
+        server.ctx,
+        new Request(server.url(`/commerce/v1/purchase-attempts/${attemptId}/events`), {
+          headers: { [DEV_CALLER_HEADER]: CALLER },
+        }),
+      );
+      expect(history.status).toBe(200);
+      expect(
+        attemptEventsResponseSchema.parse(await readBody(history)).events.map((event) => event.type),
+      ).toEqual(['quote.created', 'attempt.created']);
+
+      // Nothing settled as a side effect of looking: no order, no payment.
+      expect(countOrders(server.ctx.db)).toBe(0);
+      expect(countPayments(server.ctx.db)).toBe(0);
+
+      // The contrast: the attempt read IS the route that resolves it.
+      const settled = await handleRequest(
+        server.ctx,
+        new Request(server.url(`/commerce/v1/purchase-attempts/${attemptId}`), {
+          headers: { [DEV_CALLER_HEADER]: CALLER },
+        }),
+      );
+      expect((await readBody<{ status: string }>(settled)).status).toBe('confirmed');
+      expect(countOrders(server.ctx.db)).toBe(1);
+    });
+  });
+
+  test('an attempt history belongs to its caller, and only to a caller', async () => {
+    await withServer({ faults: ['payment_declined'] }, async (server) => {
+      const quote = await quoteThrough(server);
+      const attemptId = 'att_declined_owner';
+      await server.post('/commerce/v1/checkouts', checkoutBody(quote, attemptId));
+      const base = server.url(`/commerce/v1/purchase-attempts/${attemptId}/events`);
+
+      const anonymous = await handleRequest(server.ctx, new Request(base));
+      expect(anonymous.status).toBe(401);
+
+      const stranger = await handleRequest(
+        server.ctx,
+        new Request(base, { headers: { [DEV_CALLER_HEADER]: OTHER_CALLER } }),
+      );
+      // 404, not 403: a 403 would confirm the attempt exists.
+      expect(stranger.status).toBe(404);
+
+      const posted = await handleRequest(
+        server.ctx,
+        jsonRequest(base, {}, { headers: { [DEV_CALLER_HEADER]: CALLER } }),
+      );
+      expect(posted.status).toBe(404);
+    });
+  });
+
+  test('the operator surface for fulfilment is absent outside test mode', async () => {
+    await withServer({}, async (server) => {
+      const quote = await quoteThrough(server);
+      const settled = checkoutResponseSchema.parse(
+        await readBody(await server.post('/commerce/v1/checkouts', checkoutBody(quote, 'att_no_operator'))),
+      );
+      if (settled.status !== 'confirmed') throw new Error('expected confirmed');
+
+      const response = await server.post(
+        `/commerce/v1/orders/${settled.order.order_id}/fulfillment`,
+        { status: 'ready' },
+      );
+      // Not 403: the route does not exist in this deployment, and answering
+      // "forbidden" would advertise that an operator surface is there to reach.
+      expect(response.status).toBe(404);
+      expect((await envelope(response)).code).toBe('not_found');
+    });
+  });
+
+  test('the operator advances fulfilment and the buyer reads the change back', async () => {
+    await withServer({ testMode: true }, async (server) => {
+      const quote = await quoteThrough(server);
+      const settled = checkoutResponseSchema.parse(
+        await readBody(await server.post('/commerce/v1/checkouts', checkoutBody(quote, 'att_fulfil_1'))),
+      );
+      if (settled.status !== 'confirmed') throw new Error('expected confirmed');
+      const orderId = settled.order.order_id;
+      expect(settled.order.fulfillment_status.status).toBe('pending');
+
+      const ready = await server.post(`/commerce/v1/orders/${orderId}/fulfillment`, { status: 'ready' });
+      expect(ready.status).toBe(200);
+      expect(orderResponseSchema.parse(await readBody(ready)).fulfillment_status.status).toBe('ready');
+
+      // The buyer's own read reflects it: fulfilment is the merchant's fact to
+      // change and the caller's fact to see.
+      const asBuyer = await handleRequest(
+        server.ctx,
+        new Request(server.url(`/commerce/v1/orders/${orderId}`), {
+          headers: { [DEV_CALLER_HEADER]: CALLER },
+        }),
+      );
+      expect(orderResponseSchema.parse(await readBody(asBuyer)).fulfillment_status.status).toBe('ready');
+
+      expect((await server.post(`/commerce/v1/orders/${orderId}/fulfillment`, { status: 'completed' })).status)
+        .toBe(200);
+
+      // The change is part of the order's history, not only its current row.
+      const history = orderEventsResponseSchema.parse(
+        await readBody(await handleRequest(
+          server.ctx,
+          new Request(server.url(`/commerce/v1/orders/${orderId}/events`), {
+            headers: { [DEV_CALLER_HEADER]: CALLER },
+          }),
+        )),
+      );
+      expect(
+        history.events
+          .filter((event) => event.type === 'order.fulfillment_changed')
+          .map((event) => event.data),
+      ).toEqual([{ from: 'pending', to: 'ready' }, { from: 'ready', to: 'completed' }]);
+      // Payment never moved: money and coffee stay separate facts.
+      expect(history.events.some((event) => event.type === 'payment.succeeded')).toBe(true);
+    });
+  });
+
+  test('fulfilment cannot repeat itself, move backwards, or be set to pending', async () => {
+    await withServer({ testMode: true }, async (server) => {
+      const quote = await quoteThrough(server);
+      const settled = checkoutResponseSchema.parse(
+        await readBody(await server.post('/commerce/v1/checkouts', checkoutBody(quote, 'att_fulfil_2'))),
+      );
+      if (settled.status !== 'confirmed') throw new Error('expected confirmed');
+      const orderId = settled.order.order_id;
+
+      // `pending` is where an order starts. Accepting it would be a way to walk
+      // a finished order backwards.
+      expect((await server.post(`/commerce/v1/orders/${orderId}/fulfillment`, { status: 'pending' })).status)
+        .toBe(400);
+
+      expect((await server.post(`/commerce/v1/orders/${orderId}/fulfillment`, { status: 'ready' })).status).toBe(200);
+      // `ready` twice is not a transition; it is the same state restated.
+      expect((await server.post(`/commerce/v1/orders/${orderId}/fulfillment`, { status: 'ready' })).status).toBe(400);
+      expect((await server.post(`/commerce/v1/orders/${orderId}/fulfillment`, { status: 'completed' })).status)
+        .toBe(200);
+
+      // Terminal: a handed-over coffee cannot be un-made by an edit. The
+      // merchant's real answer is a refund, which is a different fact.
+      const reopen = await server.post(`/commerce/v1/orders/${orderId}/fulfillment`, { status: 'ready' });
+      expect(reopen.status).toBe(400);
+      const refusal = await envelope(reopen);
+      expect(refusal.code).toBe('invalid_request');
+      expect(refusal.details).toEqual({ from: 'completed', to: 'ready' });
+    });
+  });
+
+  test('a fulfilment update for an order that does not exist is a 404', async () => {
+    await withServer({ testMode: true }, async (server) => {
+      const response = await server.post('/commerce/v1/orders/ord_never_existed/fulfillment', { status: 'ready' });
+      expect(response.status).toBe(404);
     });
   });
 

@@ -74,6 +74,15 @@ export interface TestConfigOptions {
   readonly allowedOrigins?: readonly string[];
   readonly publicBaseUrl?: string;
   readonly databasePath?: string;
+  /**
+   * Forces the operator surface on or off, independently of faults.
+   *
+   * Defaults to "on exactly when faults are configured", which is what the
+   * fault tests already rely on. The fulfilment route needs it on with no fault
+   * involved, and the test that it is *absent* by default needs to say so
+   * without configuring a fault to get there.
+   */
+  readonly testMode?: boolean;
 }
 
 export function makeTestConfig(options: TestConfigOptions = {}): MerchantConfig {
@@ -89,7 +98,7 @@ export function makeTestConfig(options: TestConfigOptions = {}): MerchantConfig 
     locationId: LOCATION_ID,
     quoteTtlSeconds: options.quoteTtlSeconds ?? 900,
     checkoutDeadlineMs: options.checkoutDeadlineMs ?? 5_000,
-    testMode: (options.faults ?? []).length > 0,
+    testMode: options.testMode ?? (options.faults ?? []).length > 0,
     faults: new Set(options.faults ?? []),
     trustedKeys:
       options.trustedKeys ?? new Map<string, KeyObject>([[TEST_KEY_ID, testPublicKey()]]),

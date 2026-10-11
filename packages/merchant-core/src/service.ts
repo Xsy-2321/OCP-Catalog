@@ -21,11 +21,13 @@ import {
   CommerceError,
   DEV_CALLER_HEADER,
   IDEMPOTENCY_KEY_HEADER,
+  attemptEventsResponseSchema,
   checkoutRequestSchema,
   createQuoteRequestSchema,
   quoteRequestItems,
   orderEventsResponseSchema,
   orderResponseSchema,
+  updateFulfillmentRequestSchema,
   type Order,
   type Quote,
 } from '@ocp-catalog/shopping-contracts';
@@ -50,7 +52,14 @@ import {
   readJson,
   unexpectedErrorResponse,
 } from './http';
-import { requireOwnedOrder } from './orders';
+import {
+  advanceFulfillment,
+  getOrderRow,
+  parseOrderRow,
+  requireOwnedAttempt,
+  requireOwnedOrder,
+  saveOrderStatuses,
+} from './orders';
 import { buildQuote, insertQuote } from './quote';
 import type { CatalogEntryRecord } from './catalog';
 import { productPage } from './product-page';
@@ -215,19 +224,95 @@ function handleGetOrder(ctx: MerchantContext, orderId: string, request: Request)
  * uses, and before any event is gathered: a stream names the attempt, the quote
  * and the payment, so an unscoped read would turn this route into an oracle that
  * confirms other callers' purchase ids.
+ *
+ * It spans the quote as well as the order and its attempt so that the stream
+ * opens where the purchase did — `quote.created` is what recorded the price the
+ * buyer then authorized, and no other route returns it.
  */
 function handleGetOrderEvents(ctx: MerchantContext, orderId: string, request: Request): Response {
   const callerId = requireCallerId(request);
   const order = requireOwnedOrder(ctx.db, orderId, callerId);
-  const events = listEventsForSubjects(ctx.db, [order.order_id, order.purchase_attempt_id]);
+  const events = listEventsForSubjects(ctx.db, [order.order_id, order.purchase_attempt_id, order.quote_id]);
   return jsonResponse(orderEventsResponseSchema.parse({ order_id: order.order_id, events }));
+}
+
+/**
+ * The attempt's history, for the caller who owns it.
+ *
+ * This is the failure path's read surface. The order route begins at an order,
+ * so an attempt that was declined, ran past its deadline, or is still
+ * `processing` has no order to hang its records off — and those are exactly the
+ * attempts an agent that lost a response most needs to read back. Without this
+ * route those records are write-only.
+ *
+ * Deliberately a pure read. Unlike `GET /purchase-attempts/:id`, it does not
+ * settle a pending attempt: letting a read of history finish a payment would
+ * mean an observer changes what it observes, and a caller polling for evidence
+ * would silently be the thing that produced it.
+ */
+function handleGetAttemptEvents(ctx: MerchantContext, attemptId: string, request: Request): Response {
+  const callerId = requireCallerId(request);
+  // Checked before any event is gathered, for the same reason as the order
+  // route: the stream names the quote and the attempt, so an unscoped read would
+  // confirm other callers' ids.
+  const attempt = requireOwnedAttempt(ctx.db, attemptId, callerId);
+  const events = listEventsForSubjects(ctx.db, [attempt.purchase_attempt_id, attempt.quote_id]);
+  return jsonResponse(attemptEventsResponseSchema.parse({
+    purchase_attempt_id: attempt.purchase_attempt_id,
+    events,
+  }));
+}
+
+/**
+ * Advances an order's fulfilment. An operator action, not a buyer one.
+ *
+ * There is no merchant-operator identity in this demo — `x-dev-caller-id` names
+ * the *buyer*, and the buyer has no business marking their own coffee ready. So
+ * the route is gated on `MERCHANT_TEST_MODE` instead of pretending to
+ * authenticate: outside test mode it is not a route at all and the caller gets
+ * the same `not_found` as any unknown path, which is both the truthful answer
+ * and the one that leaks nothing. A real deployment needs a merchant credential
+ * here; a second forgeable header wearing a badge would be worse than an honest
+ * gap, and the code says so rather than implying the gate is security.
+ *
+ * The order is looked up unscoped by caller on purpose: the merchant is acting
+ * on its own order, so the buyer's identity is irrelevant to whether the move is
+ * allowed. What decides that is the state machine in `advanceFulfillment`.
+ */
+function handleUpdateFulfillment(ctx: MerchantContext, orderId: string, rawBody: unknown): Response {
+  if (!ctx.config.testMode) {
+    throw new CommerceError('not_found', `no route for POST /commerce/v1/orders/${orderId}/fulfillment`);
+  }
+  const parsed = updateFulfillmentRequestSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new CommerceError('invalid_request', `invalid fulfillment update: ${parsed.error.message}`);
+  }
+
+  const row = getOrderRow(ctx.db, orderId);
+  if (row === null) throw new CommerceError('not_found', `no order ${orderId}`);
+
+  const nowMs = ctx.clock.nowMs();
+  const current = parseOrderRow(row);
+  const order = advanceFulfillment(current, parsed.data.status, nowMs);
+  saveOrderStatuses(ctx.db, order);
+  recordEvent(ctx.db, {
+    subjectType: 'order',
+    subjectId: order.order_id,
+    type: 'order.fulfillment_changed',
+    nowMs,
+    data: { from: current.fulfillment_status.status, to: order.fulfillment_status.status },
+  });
+
+  return jsonResponse(orderResponseSchema.parse(order));
 }
 
 /* ---------------------------------------------------------------- dispatch */
 
 const ATTEMPT_PREFIX = '/commerce/v1/purchase-attempts/';
 const ORDER_PREFIX = '/commerce/v1/orders/';
-const ORDER_EVENTS_SUFFIX = '/events';
+/* Shared by the attempt and order event routes: both are `<resource>/events`. */
+const EVENTS_SUFFIX = '/events';
+const ORDER_FULFILLMENT_SUFFIX = '/fulfillment';
 
 export async function handleRequest(ctx: MerchantContext, request: Request): Promise<Response> {
   const { pathname } = new URL(request.url);
@@ -284,14 +369,30 @@ async function route(
   if (method === 'POST' && pathname === '/commerce/v1/checkouts') {
     return handleCheckout(ctx, await readJson(request), request);
   }
+  // The event routes are matched before the plain reads they share a prefix
+  // with. `/purchase-attempts/x/events` starts with `ATTEMPT_PREFIX` and
+  // `/orders/x/events` starts with `ORDER_PREFIX`, so a plain-read branch placed
+  // first would swallow both and answer with a resource named "x/events".
+  if (method === 'GET' && pathname.startsWith(ATTEMPT_PREFIX) && pathname.endsWith(EVENTS_SUFFIX)) {
+    let attemptId: string;
+    try { attemptId = decodeURIComponent(pathname.slice(ATTEMPT_PREFIX.length, -EVENTS_SUFFIX.length)); }
+    catch { throw new CommerceError('invalid_request', 'invalid purchase attempt URL'); }
+    return handleGetAttemptEvents(ctx, attemptId, request);
+  }
   if (method === 'GET' && pathname.startsWith(ATTEMPT_PREFIX)) {
     return handleGetAttempt(ctx, decodeURIComponent(pathname.slice(ATTEMPT_PREFIX.length)), request);
   }
-  if (method === 'GET' && pathname.startsWith(ORDER_PREFIX) && pathname.endsWith(ORDER_EVENTS_SUFFIX)) {
+  if (method === 'GET' && pathname.startsWith(ORDER_PREFIX) && pathname.endsWith(EVENTS_SUFFIX)) {
     let orderId: string;
-    try { orderId = decodeURIComponent(pathname.slice(ORDER_PREFIX.length, -ORDER_EVENTS_SUFFIX.length)); }
+    try { orderId = decodeURIComponent(pathname.slice(ORDER_PREFIX.length, -EVENTS_SUFFIX.length)); }
     catch { throw new CommerceError('invalid_request', 'invalid order URL'); }
     return handleGetOrderEvents(ctx, orderId, request);
+  }
+  if (method === 'POST' && pathname.startsWith(ORDER_PREFIX) && pathname.endsWith(ORDER_FULFILLMENT_SUFFIX)) {
+    let orderId: string;
+    try { orderId = decodeURIComponent(pathname.slice(ORDER_PREFIX.length, -ORDER_FULFILLMENT_SUFFIX.length)); }
+    catch { throw new CommerceError('invalid_request', 'invalid order URL'); }
+    return handleUpdateFulfillment(ctx, orderId, await readJson(request));
   }
   if (method === 'GET' && pathname.startsWith(ORDER_PREFIX)) {
     return handleGetOrder(ctx, decodeURIComponent(pathname.slice(ORDER_PREFIX.length)), request);

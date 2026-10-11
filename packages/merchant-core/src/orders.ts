@@ -282,13 +282,72 @@ export function parseOrderRow(row: OrderRow): Order {
   return order;
 }
 
-/** Rewrites a status after a verified change. The order's own fields are authoritative. */
+/**
+ * Rewrites a status after a verified change. The order's own fields are authoritative.
+ *
+ * The only writer is the fulfilment route; the order's payment status is settled
+ * once at creation and never edited afterwards.
+ */
 export function saveOrderStatuses(db: Database, order: Order): void {
   db.query('UPDATE orders SET order_json = ?, updated_at_ms = ? WHERE order_id = ?').run(
     JSON.stringify(order),
     Date.parse(order.updated_at),
     order.order_id,
   );
+}
+
+/* --------------------------------------------------------------- fulfilment */
+
+/**
+ * Which fulfilment moves the merchant will perform.
+ *
+ * A state machine rather than a free assignment, because two of the illegal
+ * moves are real mistakes worth rejecting loudly: `completed -> pending` would
+ * un-make a coffee that has already been handed over, and `completed -> ready`
+ * would claim it is waiting on the counter again. The merchant's answer to
+ * either is a refund, and a refund is a different fact that this row must not be
+ * able to fake by editing itself.
+ *
+ * Money and coffee stay separate (contract §5 D5): this table governs
+ * `fulfillment_status` alone and never touches `payment`.
+ */
+const FULFILLMENT_TRANSITIONS: Readonly<Record<FulfillmentStatus, readonly FulfillmentStatus[]>> = {
+  pending: ['ready', 'cancelled'],
+  ready: ['completed', 'cancelled'],
+  completed: [],
+  cancelled: [],
+};
+
+/** A state an operator may move an order *to*. `pending` is a start, not a destination. */
+export type FulfillmentTarget = Exclude<FulfillmentStatus, 'pending'>;
+
+export function canAdvanceFulfillment(from: FulfillmentStatus, to: FulfillmentStatus): boolean {
+  return FULFILLMENT_TRANSITIONS[from].includes(to);
+}
+
+/**
+ * Returns a new order whose fulfilment has moved, or throws if the move is not
+ * allowed.
+ *
+ * Immutable on purpose: a rejected transition throws before anything is built,
+ * so a caller cannot be left holding an order that was half-updated. `payment`
+ * is copied through untouched — settling money is not this function's business.
+ */
+export function advanceFulfillment(order: Order, to: FulfillmentTarget, nowMs: number): Order {
+  const from = order.fulfillment_status.status;
+  if (!canAdvanceFulfillment(from, to)) {
+    throw new CommerceError(
+      'invalid_request',
+      `fulfillment cannot move from ${from} to ${to}`,
+      { from, to },
+    );
+  }
+  const now = toIso(nowMs);
+  return orderSchema.parse({
+    ...order,
+    fulfillment_status: { status: to, updated_at: now },
+    updated_at: now,
+  });
 }
 
 export function countOrders(db: Database): number {
