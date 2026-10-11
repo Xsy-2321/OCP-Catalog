@@ -115,19 +115,35 @@ interface EventRow {
 }
 
 export function listEvents(db: Database, subjectId: string): readonly PurchaseEvent[] {
+  return listEventsForSubjects(db, [subjectId]);
+}
+
+/**
+ * The events of several subjects, merged into one insertion-ordered stream.
+ *
+ * One purchase writes events against more than one subject — `order.created`
+ * under the order, `attempt.*` and `payment.*` under its attempt — and they all
+ * happen inside the same transaction, so they share a millisecond. Reading them
+ * one subject at a time and concatenating would put the attempt's story before
+ * the order's regardless of which came first; a single query ordered by `rowid`
+ * interleaves them into the sequence that actually happened.
+ */
+export function listEventsForSubjects(db: Database, subjectIds: readonly string[]): readonly PurchaseEvent[] {
+  if (subjectIds.length === 0) return [];
   // Ordered by `rowid`, not by `occurred_at_ms`. Every event of one checkout
   // shares a timestamp — they happen within the same millisecond — so ordering
   // by it would shuffle "payment succeeded" behind "order created" at random,
   // and the log would describe a sequence that never happened. `rowid` is the
   // insertion order, which is the sequence that did.
+  const placeholders = subjectIds.map(() => '?').join(', ');
   const rows = db
-    .query<EventRow, [string]>(
+    .query<EventRow, string[]>(
       `SELECT event_id, subject_type, subject_id, type, occurred_at_ms, data_json
          FROM purchase_events
-        WHERE subject_id = ?
+        WHERE subject_id IN (${placeholders})
         ORDER BY rowid ASC`,
     )
-    .all(subjectId);
+    .all(...subjectIds);
 
   return rows.map((row) => purchaseEventSchema.parse({
     event_id: row.event_id,

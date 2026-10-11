@@ -24,6 +24,7 @@ import {
   checkoutRequestSchema,
   createQuoteRequestSchema,
   quoteRequestItems,
+  orderEventsResponseSchema,
   orderResponseSchema,
   type Order,
   type Quote,
@@ -37,7 +38,7 @@ import type { MerchantConfig } from './config';
 import { CATALOG_SEED } from './data/catalog';
 import { openMerchantDb } from './db';
 import { catalogWithInventory, initializeInventory } from './inventory';
-import { recordEvent } from './events';
+import { listEventsForSubjects, recordEvent } from './events';
 import {
   errorResponse,
   handleDiscovery,
@@ -207,10 +208,26 @@ function handleGetOrder(ctx: MerchantContext, orderId: string, request: Request)
   return jsonResponse(order);
 }
 
+/**
+ * The order's status history, for the caller who owns it.
+ *
+ * Ownership is settled through the same `requireOwnedOrder` the plain order read
+ * uses, and before any event is gathered: a stream names the attempt, the quote
+ * and the payment, so an unscoped read would turn this route into an oracle that
+ * confirms other callers' purchase ids.
+ */
+function handleGetOrderEvents(ctx: MerchantContext, orderId: string, request: Request): Response {
+  const callerId = requireCallerId(request);
+  const order = requireOwnedOrder(ctx.db, orderId, callerId);
+  const events = listEventsForSubjects(ctx.db, [order.order_id, order.purchase_attempt_id]);
+  return jsonResponse(orderEventsResponseSchema.parse({ order_id: order.order_id, events }));
+}
+
 /* ---------------------------------------------------------------- dispatch */
 
 const ATTEMPT_PREFIX = '/commerce/v1/purchase-attempts/';
 const ORDER_PREFIX = '/commerce/v1/orders/';
+const ORDER_EVENTS_SUFFIX = '/events';
 
 export async function handleRequest(ctx: MerchantContext, request: Request): Promise<Response> {
   const { pathname } = new URL(request.url);
@@ -269,6 +286,12 @@ async function route(
   }
   if (method === 'GET' && pathname.startsWith(ATTEMPT_PREFIX)) {
     return handleGetAttempt(ctx, decodeURIComponent(pathname.slice(ATTEMPT_PREFIX.length)), request);
+  }
+  if (method === 'GET' && pathname.startsWith(ORDER_PREFIX) && pathname.endsWith(ORDER_EVENTS_SUFFIX)) {
+    let orderId: string;
+    try { orderId = decodeURIComponent(pathname.slice(ORDER_PREFIX.length, -ORDER_EVENTS_SUFFIX.length)); }
+    catch { throw new CommerceError('invalid_request', 'invalid order URL'); }
+    return handleGetOrderEvents(ctx, orderId, request);
   }
   if (method === 'GET' && pathname.startsWith(ORDER_PREFIX)) {
     return handleGetOrder(ctx, decodeURIComponent(pathname.slice(ORDER_PREFIX.length)), request);

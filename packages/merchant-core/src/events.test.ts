@@ -14,7 +14,7 @@
  * timestamp and asserts they come back in the order they happened.
  */
 import { describe, expect, test } from 'bun:test';
-import { FORBIDDEN_EVENT_KEYS, assertRedacted, listEvents, recordEvent } from './events';
+import { FORBIDDEN_EVENT_KEYS, assertRedacted, listEvents, listEventsForSubjects, recordEvent } from './events';
 import { makeTempDatabasePath, openTestDb, TEST_NOW_MS } from './test-support';
 
 function withDb<T>(work: (db: ReturnType<typeof openTestDb>) => T): T {
@@ -149,6 +149,50 @@ describe('recordEvent', () => {
       }
 
       expect(listEvents(db, 'att_1').map((event) => event.type)).toEqual([...types]);
+    });
+  });
+});
+
+describe('listEventsForSubjects', () => {
+  test('merges several subjects into the sequence they were written in', () => {
+    // An order's story spans two subjects: the attempt and payment records hang
+    // off the attempt, then `order.created` hangs off the order. Reading one
+    // subject at a time and concatenating would put the attempt's records first
+    // and the order's own line last regardless of which actually came first.
+    withDb((db) => {
+      const written = [
+        ['attempt', 'att_1', 'attempt.created'],
+        ['attempt', 'att_1', 'payment.succeeded'],
+        ['order', 'ord_1', 'order.created'],
+        ['attempt', 'att_1', 'attempt.confirmed'],
+      ] as const;
+      for (const [subjectType, subjectId, type] of written) {
+        recordEvent(db, { subjectType, subjectId, type, nowMs: TEST_NOW_MS, data: {} });
+      }
+
+      expect(listEventsForSubjects(db, ['ord_1', 'att_1']).map((event) => event.type)).toEqual([
+        'attempt.created',
+        'payment.succeeded',
+        'order.created',
+        'attempt.confirmed',
+      ]);
+    });
+  });
+
+  test('drops subjects that have no events instead of inventing rows', () => {
+    withDb((db) => {
+      recordEvent(db, { subjectType: 'attempt', subjectId: 'att_1', type: 'attempt.created', nowMs: TEST_NOW_MS, data: {} });
+
+      expect(listEventsForSubjects(db, ['att_1', 'att_absent'])).toHaveLength(1);
+      expect(listEventsForSubjects(db, ['att_absent'])).toEqual([]);
+    });
+  });
+
+  test('an empty subject list asks the database nothing', () => {
+    // `WHERE subject_id IN ()` is not valid SQL, so the guard is what keeps an
+    // order with no subjects from turning into a syntax error at the driver.
+    withDb((db) => {
+      expect(listEventsForSubjects(db, [])).toEqual([]);
     });
   });
 });

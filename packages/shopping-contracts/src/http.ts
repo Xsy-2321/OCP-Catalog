@@ -1,5 +1,5 @@
 /**
- * Request and response shapes for the four demo commerce endpoints.
+ * Request and response shapes for the five demo commerce endpoints.
  *
  * The status code carries meaning here, so it is part of the contract rather
  * than an implementation detail:
@@ -9,6 +9,7 @@
  *                                               -> 202  processing  (outcome unknown)
  *   GET  /commerce/v1/purchase-attempts/:id     -> 200  PurchaseAttempt
  *   GET  /commerce/v1/orders/:id                -> 200  Order
+ *   GET  /commerce/v1/orders/:id/events         -> 200  OrderEvents
  *
  * `202 processing` is the important one. When checkout does not finish inside
  * the merchant's own timeout, the truthful answer is "not known yet" — so it is
@@ -24,7 +25,7 @@
 import { z } from 'zod';
 import { authorizationProofSchema } from './authorization';
 import { purchaseAttemptSchema } from './attempt';
-import { orderSchema } from './order';
+import { orderSchema, purchaseEventSchema } from './order';
 import { quoteSchema } from './quote';
 import { quoteFulfillmentSchema } from './terms';
 
@@ -122,3 +123,28 @@ export const purchaseAttemptResponseSchema = purchaseAttemptSchema;
 
 /** `200` body for `GET /commerce/v1/orders/:id`. */
 export const orderResponseSchema = orderSchema;
+
+/**
+ * `200` body for `GET /commerce/v1/orders/:id/events`.
+ *
+ * The history spans two subjects, because one order does. Its `attempt.*` and
+ * `payment.*` records sit under the purchase attempt — the order row does not
+ * exist until that attempt settles, so its story begins before its own subject
+ * id does. Returning only the `order` subject would answer "what happened to my
+ * order?" with a single `order.created` line and hide the payment that produced
+ * it.
+ *
+ * The events are the stored records, verbatim: redaction is enforced once, at
+ * write time (`assertRedacted`), and a second, different filter here would be
+ * exactly the "remember not to pass that field" decay that gate exists to
+ * prevent. See `docs/coffee-merchant/CONTRACT.md` §11 D10 for why that is the
+ * only enforcement point.
+ */
+export const orderEventsResponseSchema = z
+  .object({
+    order_id: z.string().min(1),
+    events: z.array(purchaseEventSchema),
+  })
+  .strict();
+
+export type OrderEventsResponse = z.infer<typeof orderEventsResponseSchema>;

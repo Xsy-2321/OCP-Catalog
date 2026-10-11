@@ -1,10 +1,11 @@
 # C0 契约：购物交易接口（本地整合候选）
 
-- **契约版本**：`SHOPPING_CONTRACT_VERSION = 1.0.0`
+- **契约版本**：`SHOPPING_CONTRACT_VERSION = 1.1.0`
 - **冻结日期**：2026-10-07
 - **维护者**：项目维护者（独立维护 A/B 两侧）
 - **整合澄清日期**：2026-10-07；新增整篮报价和配送信息，兼容既有单商品自取请求及已保存的报价、订单
 - **版本更正日期**：2026-10-09；0.2.0 只升了次版本号，但该次改动把订单支付字段由 `payment_status` 改名为 `payment`，而 `orderSchema` 在 0.1.0 就已经是线上响应 schema ⇒ 按 §14 规则 2 属破坏性变更，故更正为 `1.0.0`。无新增代码改动
+- **增补日期**：2026-10-11；新增只读端点 `GET /commerce/v1/orders/:id/events`（订单状态变更历史）⇒ 按 §14 规则 1 升次版本号 `1.0.0` → `1.1.0`。纯增量，A 侧无需改动即可继续工作
 - **当前状态**：已由维护者合入 `main`（`8527358`，PR #1）；本文档与 `packages/shopping-contracts/` 仍为契约描述
 - **落地代码**：`packages/shopping-contracts/`、`fixtures/shopping/`
 
@@ -28,7 +29,7 @@
 | 报价与 `terms_hash` | [`src/quote.ts`](../../packages/shopping-contracts/src/quote.ts) |
 | 金额换算 | [`src/money.ts`](../../packages/shopping-contracts/src/money.ts) |
 | 错误码与 HTTP 映射 | [`src/errors.ts`](../../packages/shopping-contracts/src/errors.ts) |
-| 四个端点的请求/响应 | [`src/http.ts`](../../packages/shopping-contracts/src/http.ts) |
+| 五个端点的请求/响应 | [`src/http.ts`](../../packages/shopping-contracts/src/http.ts) |
 | 固定测试数据 | [`fixtures/shopping/`](../../fixtures/shopping/README.md) |
 
 **两个函数绝对不能各写一份**：
@@ -95,7 +96,8 @@ A 从 Catalog 搜到商品
         │      └─ 202 processing  ─► 结果未知，请轮询 attempt
         │
         ├─► GET /commerce/v1/purchase-attempts/:id
-        └─► GET /commerce/v1/orders/:id
+        ├─► GET /commerce/v1/orders/:id
+        └─► GET /commerce/v1/orders/:id/events      订单状态变更历史（只读）
 ```
 
 **B 只维护事实**：价格、库存、能否成交、付款状态、订单记录。
@@ -329,6 +331,21 @@ A 的错误处理必须把跨调用者的 404 保持为未知结果，不能据�
 - **当前没有 reset/清空数据工具。** 联合测试显式创建独立 SQLite 和 A 数据目录，
   不复用现有服务存储。将来新增清理工具也只允许作用于明确指定的测试存储。
 - 事件第一版只能称"**应用过程记录**"——未做防篡改验证前**不得宣传为不可篡改账本**。
+
+**订单事件读端点（2026-10-11 增补）**：`GET /commerce/v1/orders/:id/events` 返回
+该订单的状态变更历史，`200` 体为 `orderEventsResponseSchema`（`{order_id, events}`）。
+它聚合**两个 subject**——订单自身的 `order.created`，及其 `purchase_attempt_id` 下的
+`attempt.*` / `payment.*`。订单因该 attempt 成交而存在，其历史早于订单行本身；只返回
+`order` subject 会把"付款成功"这一**订单存在的原因**挡在外面。所有权走与
+`GET /commerce/v1/orders/:id` 完全相同的 `requireOwnedOrder`：事件流点名 attempt、
+quote 与 payment，无作用域的读会把端点变成确认他人购买 id 的预言机。
+
+事件为**存储原样返回**，读取侧不做二次过滤。脱敏只在写入侧执行一次（`assertRedacted`），
+这与本节的立场一致：规则一旦靠"记得别传那个字段"维护就会腐烂，再加一层不同的读时过滤
+正是该写入门要防止的腐烂。`payment_id`（`pay_<uuid>`，本商家模拟支付行 id）不在
+`FORBIDDEN_EVENT_KEYS` 内，是写入侧的显式放行——它**不是** `Order` 上被刻意排除的
+`payment_reference`（凭证形状）。若将来判定它不应上线，正确修法是**从写入的数据里移除**
+（一处，全面生效），而不是在读端点特判。
 
 SQLite 库存按商户/商品持久化；processing 在事务中预留库存，confirmed 消耗原
 预留而不重复扣减，确定付款失败释放预留。重启不把已售库存重置成 seed 数量。

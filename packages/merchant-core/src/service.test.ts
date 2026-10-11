@@ -29,6 +29,7 @@ import {
   EXPECTED_FILTERABLE_FIELD_REFS,
   IDEMPOTENCY_KEY_HEADER,
   checkoutResponseSchema,
+  orderEventsResponseSchema,
   orderResponseSchema,
   type CommerceErrorResponse,
   type Quote,
@@ -486,6 +487,85 @@ describe('the commerce surface', () => {
         }),
       );
       expect(missing.status).toBe(404);
+    });
+  });
+
+  test("an order's event history is the story of its attempt as well as itself", async () => {
+    await withServer({}, async (server) => {
+      const quote = await quoteThrough(server);
+      const attemptId = 'att_events_1';
+      const settled = checkoutResponseSchema.parse(
+        await readBody(await server.post('/commerce/v1/checkouts', checkoutBody(quote, attemptId))),
+      );
+      if (settled.status !== 'confirmed') throw new Error(`expected confirmed, got ${settled.status}`);
+
+      const response = await handleRequest(
+        server.ctx,
+        new Request(server.url(`/commerce/v1/orders/${settled.order.order_id}/events`), {
+          headers: { [DEV_CALLER_HEADER]: CALLER },
+        }),
+      );
+      expect(response.status).toBe(200);
+
+      const history = orderEventsResponseSchema.parse(await readBody(response));
+      expect(history.order_id).toBe(settled.order.order_id);
+      // The order exists because the attempt settled, so its history has to
+      // carry the payment and the attempt too. A stream of only `order.created`
+      // would hide the reason the order is there at all.
+      expect(history.events.map((event) => event.type)).toEqual([
+        'attempt.created',
+        'payment.succeeded',
+        'order.created',
+        'attempt.confirmed',
+      ]);
+      // Only the two subjects this caller owns appear; nothing else rode along.
+      expect(
+        history.events.every((event) => [settled.order.order_id, attemptId].includes(event.subject_id)),
+      ).toBe(true);
+    });
+  });
+
+  test("another caller cannot read an order's history through its events", async () => {
+    await withServer({}, async (server) => {
+      const quote = await quoteThrough(server);
+      const settled = checkoutResponseSchema.parse(
+        await readBody(await server.post('/commerce/v1/checkouts', checkoutBody(quote, 'att_events_owner'))),
+      );
+      if (settled.status !== 'confirmed') throw new Error('expected confirmed');
+
+      const response = await handleRequest(
+        server.ctx,
+        new Request(server.url(`/commerce/v1/orders/${settled.order.order_id}/events`), {
+          headers: { [DEV_CALLER_HEADER]: OTHER_CALLER },
+        }),
+      );
+      // 404, not 403: a 403 would confirm the order exists, and a history is the
+      // most confirmable thing there is — it names the payment row.
+      expect(response.status).toBe(404);
+      expect((await envelope(response)).code).toBe('not_found');
+    });
+  });
+
+  test('the event route needs a caller, refuses other verbs, and 404s on an unknown order', async () => {
+    await withServer({}, async (server) => {
+      const base = server.url('/commerce/v1/orders/ord_never_existed/events');
+
+      const anonymous = await handleRequest(server.ctx, new Request(base));
+      expect(anonymous.status).toBe(401);
+      expect((await envelope(anonymous)).code).toBe('unauthorized');
+
+      const missing = await handleRequest(
+        server.ctx,
+        new Request(base, { headers: { [DEV_CALLER_HEADER]: CALLER } }),
+      );
+      expect(missing.status).toBe(404);
+
+      // Only GET is routed here: the history is a read surface, never a write one.
+      const posted = await handleRequest(
+        server.ctx,
+        jsonRequest(base, {}, { headers: { [DEV_CALLER_HEADER]: CALLER } }),
+      );
+      expect(posted.status).toBe(404);
     });
   });
 
