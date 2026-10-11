@@ -79,7 +79,7 @@ const config = parseConfigView({ mode: 'mock', merchant_id: 'coffee', merchant_d
   merchant_health: { status: 'mock', message: 'local portal-entry fixture', checked_at: at } });
 const emptyPending = parsePendingSessionsView({ sessions: [] });
 const assetMap = new Map([['/', 'index.html'], ['/demo', 'demo.html'],
-  ...['styles.css', 'merchant.css', 'model-settings.css', 'model-settings.js', 'app.js', 'contracts.js', 'view-model.js', 'dom.js', 'api-client.js', 'coffee-bg.svg'].map(file => [`/${file}`, file])]);
+  ...['styles.css', 'merchant.css', 'model-settings.css', 'model-settings.js', 'app.js', 'contracts.js', 'view-model.js', 'dom.js', 'api-client.js', 'coffee-bg.svg', 'coffee-cup.png', 'coffee-badge.png'].map(file => [`/${file}`, file])]);
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
   const entry = { scenario: scenario?.name, method: request.method, path: url.pathname, query: url.search };
@@ -123,7 +123,7 @@ const server = createServer(async (request, response) => {
     }
     const file = assetMap.get(url.pathname);
     if (!file) return json({ error: 'not_found' }, 404);
-    response.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : 'text/html', 'cache-control': 'no-store' });
+    response.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : file.endsWith('.png') ? 'image/png' : 'text/html', 'cache-control': 'no-store' });
     response.end(await readFile(resolve(assets, file)));
   } catch (error) { json({ error: String(error) }, 500); }
 });

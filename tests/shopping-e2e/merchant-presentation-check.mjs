@@ -36,7 +36,7 @@ const overview = parseMerchantOverviewView({
 const diagnostic = `E:/OCP-Catalog/internal-source.ts ${Object.values(internalIds).join(' ')}`;
 let mode = 'success', releaseRead, browser, observeHeldRead;
 const heldReadStarted = new Promise(resolveRead => { observeHeldRead = resolveRead; });
-const assetMap = new Map([['/merchant', 'merchant.html'], ...['styles.css', 'merchant.css', 'merchant.js', 'contracts.js', 'dom.js', 'api-client.js'].map(file => [`/${file}`, file])]);
+const assetMap = new Map([['/merchant', 'merchant.html'], ...['styles.css', 'merchant.css', 'merchant.js', 'contracts.js', 'dom.js', 'api-client.js', 'coffee-cup.png', 'coffee-badge.png'].map(file => [`/${file}`, file])]);
 const server = createServer(async (request, response) => {
   const path = new URL(request.url, 'http://127.0.0.1').pathname;
   requests.push({ method: request.method, path });
@@ -52,7 +52,7 @@ const server = createServer(async (request, response) => {
     if (path === `/api/merchant-demo/orders/${order.order_id}`) return json(order);
     const file = assetMap.get(path);
     if (!file) return json({ error: 'not_found' }, 404);
-    response.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', 'cache-control': 'no-store' });
+    response.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.png') ? 'image/png' : 'text/html', 'cache-control': 'no-store' });
     response.end(await readFile(resolve(assets, file)));
   } catch (error) { json({ error: String(error) }, 500); }
 });
